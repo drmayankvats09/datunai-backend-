@@ -187,9 +187,13 @@ app.get('/', (req, res) => {
   });
 });
 
-// ✅ SENTRY TEST ROUTE (ALAG SE)
 app.get('/sentry-test', (req, res) => {
-  throw new Error("Sentry test error");
+  try {
+    throw new Error("Sentry test error");
+  } catch (e) {
+    Sentry.captureException(e);
+    res.status(500).send("Error sent to Sentry ✅");
+  }
 });
 
 // ── MAIN CHAT ENDPOINT ──
