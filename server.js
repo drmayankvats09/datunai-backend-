@@ -179,15 +179,17 @@ function extractAssessment(messages) {
 
 // ── HEALTH CHECK ──
 app.get('/', (req, res) => {
-  app.get('/sentry-test', (req, res) => {
-  throw new Error("Sentry test error");
-});
   res.json({
     status: 'Datun AI Backend is Live 🦷',
     version: '2.0.0',
     timestamp: new Date().toISOString(),
-    health: 'ok'  // 
+    health: 'ok'
   });
+});
+
+// ✅ SENTRY TEST ROUTE (ALAG SE)
+app.get('/sentry-test', (req, res) => {
+  throw new Error("Sentry test error");
 });
 
 // ── MAIN CHAT ENDPOINT ──
