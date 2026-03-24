@@ -15,7 +15,6 @@ const { google } = require('googleapis');
 const { Pool } = require('pg');
 
 const app = express();
-app.use(Sentry.Handlers.requestHandler());
 const PORT = process.env.PORT || 3000;
 app.set('trust proxy', 1);
 
@@ -180,6 +179,9 @@ function extractAssessment(messages) {
 
 // ── HEALTH CHECK ──
 app.get('/', (req, res) => {
+  app.get('/sentry-test', (req, res) => {
+  throw new Error("Sentry test error");
+});
   res.json({
     status: 'Datun AI Backend is Live 🦷',
     version: '2.0.0',
@@ -227,6 +229,7 @@ app.post('/api/chat', async (req, res) => {
     res.json(response.data);
 
   } catch (error) {
+    Sentry.captureException(error);
     console.error('Chat error:', error.response?.data || error.message);
 
     if (error.response?.status === 401) {
@@ -284,13 +287,13 @@ app.post('/api/save-consultation', async (req, res) => {
     res.json({ success: true });
 
   } catch (err) {
+    Sentry.captureException(err);
     console.error('Save error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
 // ── START SERVER ──
-app.use(Sentry.Handlers.errorHandler());
 app.listen(PORT, () => {
   console.log(`
   ╔═══════════════════════════════════════╗
