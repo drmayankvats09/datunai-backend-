@@ -178,13 +178,28 @@ function extractAssessment(messages) {
 }
 
 // ── HEALTH CHECK ──
-app.get('/', (req, res) => {
-  res.json({
-    status: 'Datun AI Backend is Live 🦷',
-    version: '2.0.0',
-    timestamp: new Date().toISOString(),
-    health: 'ok'
-  });
+app.get('/health', async (req, res) => {
+  try {
+    // DB check
+    await pool.query('SELECT 1');
+
+    res.json({
+      status: 'ok',
+      server: 'running',
+      database: 'connected',
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    Sentry.captureException(error);
+
+    res.status(500).json({
+      status: 'error',
+      server: 'running',
+      database: 'disconnected',
+      error: error.message
+    });
+  }
 });
 
 app.get('/sentry-test', (req, res) => {
