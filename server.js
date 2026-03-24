@@ -153,7 +153,6 @@ async function saveToDatabase(data) {
  catch (err) {
   Sentry.captureException(err);
   console.error('❌ DB save error:', err.message);
-}
   }
 }
 
