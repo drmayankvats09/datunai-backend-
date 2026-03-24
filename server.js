@@ -151,6 +151,7 @@ async function saveToDatabase(data) {
     );
     console.log('✅ Saved to PostgreSQL:', data.name, data.email);
   } catch (err) {
+    Sentry.captureException(err);
     console.error('❌ DB save error:', err.message);
   }
 }
