@@ -81,6 +81,7 @@ async function initDB() {
     `);
     console.log('✅ PostgreSQL connected & table ready');
   } catch (err) {
+    Sentry.captureException(err);
     console.error('❌ DB init error:', err.message);
   }
 }
@@ -124,6 +125,7 @@ async function saveToSheets(data) {
     });
     console.log('✅ Saved to Google Sheets:', data.name, data.email);
   } catch (err) {
+    Sentry.captureException(err);
     console.error('❌ Sheets save error:', err.message);
   }
 }
