@@ -178,12 +178,12 @@ function extractAssessment(messages) {
 }
 
 // ── HEALTH CHECK ──
+// ── HEALTH CHECK (FINAL) ──
 app.get('/health', async (req, res) => {
   try {
-    // DB check
     await pool.query('SELECT 1');
 
-    res.json({
+    res.status(200).json({
       status: 'ok',
       server: 'running',
       database: 'connected',
@@ -200,6 +200,10 @@ app.get('/health', async (req, res) => {
       error: error.message
     });
   }
+});
+
+app.head('/health', (req, res) => {
+  res.status(200).end();
 });
 
 app.get('/sentry-test', (req, res) => {
