@@ -178,7 +178,6 @@ function extractAssessment(messages) {
 }
 
 // ── HEALTH CHECK ──
-// ── HEALTH CHECK (FINAL) ──
 app.get('/health', async (req, res) => {
   try {
     await pool.query('SELECT 1');
@@ -202,17 +201,9 @@ app.get('/health', async (req, res) => {
   }
 });
 
+// ── UPTIMEROBOT FIX (HEAD SUPPORT) ──
 app.head('/health', (req, res) => {
   res.status(200).end();
-});
-
-app.get('/sentry-test', (req, res) => {
-  try {
-    throw new Error("Sentry test error");
-  } catch (e) {
-    Sentry.captureException(e);
-    res.status(500).send("Error sent to Sentry ✅");
-  }
 });
 
 // ── MAIN CHAT ENDPOINT ──
