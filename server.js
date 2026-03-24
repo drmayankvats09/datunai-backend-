@@ -4,6 +4,7 @@
 // ═══════════════════════════════════════════════
 
 require('dotenv').config();
+const logger = require('./logger');
 const Sentry = require("@sentry/node");
 Sentry.init({ dsn: process.env.SENTRY_DSN });
 const express = require('express');
@@ -79,10 +80,10 @@ async function initDB() {
         session_id VARCHAR(255)
       )
     `);
-    console.log('✅ PostgreSQL connected & table ready');
+    logger.info('PostgreSQL connected & table ready');
   } catch (err) {
     Sentry.captureException(err);
-    console.error('❌ DB init error:', err.message);
+    logger.error('DB init error: ' + err.message);
   }
 }
 initDB();
