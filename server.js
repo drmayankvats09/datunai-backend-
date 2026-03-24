@@ -15,6 +15,7 @@ const { google } = require('googleapis');
 const { Pool } = require('pg');
 
 const app = express();
+app.use(Sentry.Handlers.requestHandler());
 const PORT = process.env.PORT || 3000;
 app.set('trust proxy', 1);
 
@@ -289,6 +290,7 @@ app.post('/api/save-consultation', async (req, res) => {
 });
 
 // ── START SERVER ──
+app.use(Sentry.Handlers.errorHandler());
 app.listen(PORT, () => {
   console.log(`
   ╔═══════════════════════════════════════╗
