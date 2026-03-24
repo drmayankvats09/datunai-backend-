@@ -124,10 +124,10 @@ async function saveToSheets(data) {
       valueInputOption: 'RAW',
       requestBody: { values: [row] }
     });
-    console.log('✅ Saved to Google Sheets:', data.name, data.email);
+    logger.info('Saved to Google Sheets: ' + data.name + ' ' + data.email);
   } catch (err) {
     Sentry.captureException(err);
-    console.error('❌ Sheets save error:', err.message);
+    logger.error('Sheets save error: ' + err.message);
   }
 }
 
@@ -151,11 +151,11 @@ async function saveToDatabase(data) {
       ]
     );
 
-    console.log('✅ Saved to PostgreSQL:', data.name, data.email);
+    logger.info('Saved to PostgreSQL: ' + data.name + ' ' + data.email);
 
   } catch (err) {
     Sentry.captureException(err);
-    console.error('❌ DB save error:', err.message);
+    logger.error('DB save error: ' + err.message);
   }
 }
 // ── HELPER: Extract diagnosis & urgency ──
@@ -251,7 +251,7 @@ app.post('/api/chat', async (req, res) => {
 
   } catch (error) {
     Sentry.captureException(error);
-    console.error('Chat error:', error.response?.data || error.message);
+    logger.error('Chat error: ' + (error.response?.data || error.message));
 
     if (error.response?.status === 401) {
       return res.status(500).json({ error: 'API authentication failed' });
@@ -309,7 +309,7 @@ app.post('/api/save-consultation', async (req, res) => {
 
   } catch (err) {
     Sentry.captureException(err);
-    console.error('Save error:', err.message);
+    logger.error('Save error: ' + err.message);
     res.status(500).json({ error: err.message });
   }
 });
