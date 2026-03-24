@@ -157,7 +157,6 @@ async function saveToDatabase(data) {
     console.error('❌ DB save error:', err.message);
   }
 }
-
 // ── HELPER: Extract diagnosis & urgency ──
 function extractAssessment(messages) {
   let diagnosis = '';
