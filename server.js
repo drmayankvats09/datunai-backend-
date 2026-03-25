@@ -233,47 +233,60 @@ app.post('/api/chat', async (req, res) => {
     }
 
     if (!process.env.ANTHROPIC_API_KEY) {
-      console.error('ANTHROPIC_API_KEY not set!');
       return res.status(500).json({ error: 'Server configuration error' });
     }
 
-    const response = await axios.post(
-      'https://api.anthropic.com/v1/messages',
-      {
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 2000,
-        system: system || '',
-        messages: messages
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': process.env.ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01'
-        },
-        timeout: 60000
+    // ── RETRY LOGIC ──
+    let lastError;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const response = await axios.post(
+          'https://api.anthropic.com/v1/messages',
+          {
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 2000,
+            system: system || '',
+            messages: messages
+          },
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': process.env.ANTHROPIC_API_KEY,
+              'anthropic-version': '2023-06-01'
+            },
+            timeout: 60000
+          }
+        );
+        return res.json(response.data);
+      } catch (err) {
+        lastError = err;
+        if (attempt < 3) {
+          logger.warn(`Claude API attempt ${attempt} failed. Retrying...`);
+          await new Promise(r => setTimeout(r, 1000 * attempt));
+        }
       }
-    );
+    }
 
-    res.json(response.data);
+    // All retries failed
+    Sentry.captureException(lastError);
+    logger.error('Chat error after 3 attempts: ' + (lastError.response?.data || lastError.message));
 
-  } catch (error) {
-    Sentry.captureException(error);
-    logger.error('Chat error: ' + (error.response?.data || error.message));
-
-    if (error.response?.status === 401) {
+    if (lastError.response?.status === 401) {
       return res.status(500).json({ error: 'API authentication failed' });
     }
-    if (error.response?.status === 429) {
-      return res.status(429).json({ error: 'AI service busy. Please try again.' });
+    if (lastError.response?.status === 429) {
+      return res.status(429).json({ error: 'AI service busy. Please try again in a moment.' });
     }
-    if (error.code === 'ECONNABORTED') {
+    if (lastError.code === 'ECONNABORTED') {
       return res.status(504).json({ error: 'Request timed out. Please try again.' });
     }
 
+    res.status(500).json({ error: 'Kuch gadbad hui. Dobara try karein. 🙏' });
+
+  } catch (error) {
+    Sentry.captureException(error);
     res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
-});
 
 // ── SAVE CONSULTATION ──
 app.post('/api/save-consultation', async (req, res) => {
