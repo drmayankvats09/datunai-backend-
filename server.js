@@ -181,6 +181,14 @@ function extractAssessment(messages) {
 
   return { diagnosis, urgency, chiefComplaint };
 }
+// ── ROOT ──
+app.get('/', (req, res) => {
+  res.json({ 
+    status: 'Datun AI Backend is Live 🦷', 
+    version: '2.0.0',
+    timestamp: new Date().toISOString()
+  });
+});
 
 // ── HEALTH CHECK ──
 app.get('/health', async (req, res) => {
