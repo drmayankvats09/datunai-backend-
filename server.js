@@ -150,14 +150,13 @@ async function saveToDatabase(data) {
         data.sessionId || ''
       ]
     );
-
     logger.info('Saved to PostgreSQL: ' + data.name + ' ' + data.email);
-
   } catch (err) {
     Sentry.captureException(err);
     logger.error('DB save error: ' + err.message);
   }
 }
+
 // ── HELPER: Extract diagnosis & urgency ──
 function extractAssessment(messages) {
   let diagnosis = '';
@@ -181,10 +180,11 @@ function extractAssessment(messages) {
 
   return { diagnosis, urgency, chiefComplaint };
 }
+
 // ── ROOT ──
 app.get('/', (req, res) => {
-  res.json({ 
-    status: 'Datun AI Backend is Live 🦷', 
+  res.json({
+    status: 'Datun AI Backend is Live 🦷',
     version: '2.0.0',
     timestamp: new Date().toISOString()
   });
@@ -194,17 +194,14 @@ app.get('/', (req, res) => {
 app.get('/health', async (req, res) => {
   try {
     await pool.query('SELECT 1');
-
     res.status(200).json({
       status: 'ok',
       server: 'running',
       database: 'connected',
       timestamp: new Date().toISOString()
     });
-
   } catch (error) {
     Sentry.captureException(error);
-
     res.status(500).json({
       status: 'error',
       server: 'running',
@@ -281,12 +278,18 @@ app.post('/api/chat', async (req, res) => {
       return res.status(504).json({ error: 'Request timed out. Please try again.' });
     }
 
-    res.status(500).json({ error: 'Kuch gadbad hui. Dobara try karein. 🙏' });
+    // Language-aware error message
+    const lang = (system || '').toLowerCase().includes('hindi') ? 'hi' : 'en';
+    const errorMsg = lang === 'hi'
+      ? 'Kuch gadbad hui. Dobara try karein. 🙏'
+      : 'Something went wrong. Please try again. 🙏';
+    res.status(500).json({ error: errorMsg });
 
   } catch (error) {
     Sentry.captureException(error);
     res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
+});
 
 // ── SAVE CONSULTATION ──
 app.post('/api/save-consultation', async (req, res) => {
