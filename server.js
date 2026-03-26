@@ -14,8 +14,6 @@ const rateLimit = require('express-rate-limit');
 const axios = require('axios');
 const { google } = require('googleapis');
 const { Pool } = require('pg');
-const jwt = require('jsonwebtoken');
-const jwksClient = require('jwks-rsa');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -82,22 +80,6 @@ async function initDB() {
         session_id VARCHAR(255)
       )
     `);
-    // Users table
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        auth0_id VARCHAR(255) UNIQUE,
-        name VARCHAR(255),
-        email VARCHAR(255) UNIQUE,
-        picture VARCHAR(500),
-        age INTEGER,
-        gender VARCHAR(20),
-        language_pref VARCHAR(5) DEFAULT 'en',
-        created_at TIMESTAMPTZ DEFAULT NOW(),
-        last_active TIMESTAMPTZ DEFAULT NOW(),
-        consultation_count INTEGER DEFAULT 0
-      )
-    `);
     logger.info('PostgreSQL connected & table ready');
   } catch (err) {
     Sentry.captureException(err);
@@ -105,63 +87,6 @@ async function initDB() {
   }
 }
 initDB();
-
-// ── AUTH0 JWT VERIFICATION ──
-const auth0Domain = process.env.AUTH0_DOMAIN || 'datunai.us.auth0.com';
-const jwks = jwksClient({
-  jwksUri: `https://${auth0Domain}/.well-known/jwks.json`,
-  cache: true,
-  rateLimit: true,
-  jwksRequestsPerMinute: 5
-});
-
-function getKey(header, callback) {
-  jwks.getSigningKey(header.kid, (err, key) => {
-    if (err) return callback(err);
-    callback(null, key.getPublicKey());
-  });
-}
-
-function verifyAuth0Token(token) {
-  return new Promise((resolve, reject) => {
-    jwt.verify(token, getKey, {
-      audience: process.env.AUTH0_CLIENT_ID,
-      issuer: `https://${auth0Domain}/`,
-      algorithms: ['RS256']
-    }, (err, decoded) => {
-      if (err) return reject(err);
-      resolve(decoded);
-    });
-  });
-}
-
-// ── AUTH MIDDLEWARE (optional — attaches user if token present) ──
-async function optionalAuth(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) return next();
-  try {
-    const token = authHeader.split(' ')[1];
-    req.user = await verifyAuth0Token(token);
-  } catch (e) {
-    // Invalid token — continue without user
-  }
-  next();
-}
-
-// ── REQUIRED AUTH MIDDLEWARE ──
-async function requireAuth(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Authentication required' });
-  }
-  try {
-    const token = authHeader.split(' ')[1];
-    req.user = await verifyAuth0Token(token);
-    next();
-  } catch (e) {
-    return res.status(401).json({ error: 'Invalid or expired token' });
-  }
-}
 
 // ── GOOGLE SHEETS SETUP ──
 const SHEET_ID = process.env.GOOGLE_SHEET_ID || process.env.GOOGLE_SHEETS_ID;
@@ -289,73 +214,6 @@ app.get('/health', async (req, res) => {
 // ── UPTIMEROBOT FIX (HEAD SUPPORT) ──
 app.head('/health', (req, res) => {
   res.status(200).end();
-});
-
-// ── AUTH: UPSERT USER AFTER AUTH0 LOGIN ──
-app.post('/api/auth/user', async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Authentication required' });
-  }
-  try {
-    const token = authHeader.split(' ')[1];
-    const decoded = await verifyAuth0Token(token);
-    const { sub: auth0Id, name, email, picture } = decoded;
-
-    // Upsert user — create if not exists, update last_active
-    const result = await pool.query(`
-      INSERT INTO users (auth0_id, name, email, picture, last_active)
-      VALUES ($1, $2, $3, $4, NOW())
-      ON CONFLICT (auth0_id) DO UPDATE
-        SET name = EXCLUDED.name,
-            email = EXCLUDED.email,
-            picture = EXCLUDED.picture,
-            last_active = NOW()
-      RETURNING *
-    `, [auth0Id, name || '', email || '', picture || '']);
-
-    const user = result.rows[0];
-    logger.info('User upserted: ' + email);
-    res.json({ success: true, user });
-  } catch (err) {
-    Sentry.captureException(err);
-    logger.error('Auth user error: ' + err.message);
-    res.status(500).json({ error: 'Failed to save user' });
-  }
-});
-
-// ── AUTH: GET USER PROFILE + HISTORY ──
-app.get('/api/auth/profile', async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Authentication required' });
-  }
-  try {
-    const token = authHeader.split(' ')[1];
-    const decoded = await verifyAuth0Token(token);
-    const { sub: auth0Id } = decoded;
-
-    const userResult = await pool.query(
-      'SELECT * FROM users WHERE auth0_id = $1', [auth0Id]
-    );
-    if (!userResult.rows.length) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    const user = userResult.rows[0];
-
-    // Get last 10 consultations
-    const histResult = await pool.query(
-      `SELECT id, timestamp, chief_complaint, diagnosis, urgency
-       FROM consultations WHERE email = $1
-       ORDER BY timestamp DESC LIMIT 10`,
-      [user.email]
-    );
-
-    res.json({ user, history: histResult.rows });
-  } catch (err) {
-    Sentry.captureException(err);
-    res.status(500).json({ error: 'Failed to get profile' });
-  }
 });
 
 // ── MAIN CHAT ENDPOINT ──
