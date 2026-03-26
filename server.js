@@ -14,6 +14,8 @@ const rateLimit = require('express-rate-limit');
 const axios = require('axios');
 const { google } = require('googleapis');
 const { Pool } = require('pg');
+const jwt = require('jsonwebtoken');
+const jwksClient = require('jwks-rsa');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -63,6 +65,35 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
+// ── AUTH0 JWT VERIFICATION ──
+const auth0Domain = process.env.AUTH0_DOMAIN;
+const jwks = jwksClient({
+  jwksUri: `https://${auth0Domain}/.well-known/jwks.json`,
+  cache: true,
+  rateLimit: true,
+  jwksRequestsPerMinute: 5
+});
+
+function getKey(header, callback) {
+  jwks.getSigningKey(header.kid, (err, key) => {
+    if (err) return callback(err);
+    callback(null, key.getPublicKey());
+  });
+}
+
+function verifyAuth0Token(token) {
+  return new Promise((resolve, reject) => {
+    jwt.verify(token, getKey, {
+      audience: process.env.AUTH0_CLIENT_ID,
+      issuer: `https://${auth0Domain}/`,
+      algorithms: ['RS256']
+    }, (err, decoded) => {
+      if (err) return reject(err);
+      resolve(decoded);
+    });
+  });
+}
+
 async function initDB() {
   try {
     await pool.query(`
@@ -78,6 +109,17 @@ async function initDB() {
         urgency VARCHAR(50),
         full_conversation TEXT,
         session_id VARCHAR(255)
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        auth0_id VARCHAR(255) UNIQUE,
+        name VARCHAR(255),
+        email VARCHAR(255) UNIQUE,
+        picture VARCHAR(500),
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        last_active TIMESTAMPTZ DEFAULT NOW()
       )
     `);
     logger.info('PostgreSQL connected & table ready');
@@ -288,6 +330,34 @@ app.post('/api/chat', async (req, res) => {
   } catch (error) {
     Sentry.captureException(error);
     res.status(500).json({ error: 'Something went wrong. Please try again.' });
+  }
+});
+
+// ── AUTH: SAVE USER AFTER LOGIN ──
+app.post('/api/auth/user', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  try {
+    const token = authHeader.split(' ')[1];
+    const decoded = await verifyAuth0Token(token);
+    const { sub: auth0Id, name, email, picture } = decoded;
+    await pool.query(`
+      INSERT INTO users (auth0_id, name, email, picture, last_active)
+      VALUES ($1, $2, $3, $4, NOW())
+      ON CONFLICT (auth0_id) DO UPDATE
+        SET name = EXCLUDED.name,
+            email = EXCLUDED.email,
+            picture = EXCLUDED.picture,
+            last_active = NOW()
+    `, [auth0Id, name || '', email || '', picture || '']);
+    logger.info('User saved: ' + email);
+    res.json({ success: true, name, email, picture });
+  } catch (err) {
+    Sentry.captureException(err);
+    logger.error('Auth user error: ' + err.message);
+    res.status(500).json({ error: 'Failed to save user' });
   }
 });
 
