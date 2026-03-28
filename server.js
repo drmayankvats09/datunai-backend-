@@ -97,6 +97,18 @@ function verifyAuth0Token(token) {
 async function initDB() {
   try {
     await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        auth0_id VARCHAR(255) UNIQUE,
+        name VARCHAR(255),
+        email VARCHAR(255) UNIQUE,
+        picture VARCHAR(500),
+        preferred_language VARCHAR(20) DEFAULT 'en',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        last_active TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS consultations (
         id SERIAL PRIMARY KEY,
         timestamp TIMESTAMPTZ DEFAULT NOW(),
@@ -108,18 +120,8 @@ async function initDB() {
         diagnosis TEXT,
         urgency VARCHAR(50),
         full_conversation TEXT,
-        session_id VARCHAR(255)
-      )
-    `);
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        auth0_id VARCHAR(255) UNIQUE,
-        name VARCHAR(255),
-        email VARCHAR(255) UNIQUE,
-        picture VARCHAR(500),
-        created_at TIMESTAMPTZ DEFAULT NOW(),
-        last_active TIMESTAMPTZ DEFAULT NOW()
+        session_id VARCHAR(255),
+        user_id UUID REFERENCES users(id)
       )
     `);
     logger.info('PostgreSQL connected & table ready');
@@ -178,8 +180,8 @@ async function saveToDatabase(data) {
   try {
     await pool.query(
       `INSERT INTO consultations 
-        (name, age, gender, email, chief_complaint, diagnosis, urgency, full_conversation, session_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        (name, age, gender, email, chief_complaint, diagnosis, urgency, full_conversation, session_id, user_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
       [
         data.name || '',
         data.age || '',
@@ -189,7 +191,8 @@ async function saveToDatabase(data) {
         data.diagnosis || '',
         data.urgency || '',
         data.fullConversation || '',
-        data.sessionId || ''
+        data.sessionId || '',
+        data.userId || null
       ]
     );
     logger.info('Saved to PostgreSQL: ' + data.name + ' ' + data.email);
@@ -343,17 +346,20 @@ app.post('/api/auth/user', async (req, res) => {
     const token = authHeader.split(' ')[1];
     const decoded = await verifyAuth0Token(token);
     const { sub: auth0Id, name, email, picture } = decoded;
-    await pool.query(`
-      INSERT INTO users (auth0_id, name, email, picture, last_active)
-      VALUES ($1, $2, $3, $4, NOW())
+    const result = await pool.query(`
+      INSERT INTO users (auth0_id, name, email, picture, preferred_language, last_active)
+      VALUES ($1, $2, $3, $4, $5, NOW())
       ON CONFLICT (auth0_id) DO UPDATE
         SET name = EXCLUDED.name,
             email = EXCLUDED.email,
             picture = EXCLUDED.picture,
+            preferred_language = COALESCE(EXCLUDED.preferred_language, users.preferred_language),
             last_active = NOW()
-    `, [auth0Id, name || '', email || '', picture || '']);
+      RETURNING id, preferred_language
+    `, [auth0Id, name || '', email || '', picture || '', req.body.preferred_language || 'en']);
+    const user = result.rows[0];
     logger.info('User saved: ' + email);
-    res.json({ success: true, name, email, picture });
+    res.json({ success: true, name, email, picture, userId: user.id, preferred_language: user.preferred_language });
   } catch (err) {
     Sentry.captureException(err);
     logger.error('Auth user error: ' + err.message);
@@ -361,10 +367,34 @@ app.post('/api/auth/user', async (req, res) => {
   }
 });
 
+// ── GET USER CONSULTATIONS (HISTORY) ──
+app.get('/api/user/consultations', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  try {
+    const token = authHeader.split(' ')[1];
+    const decoded = await verifyAuth0Token(token);
+    const userResult = await pool.query('SELECT id FROM users WHERE auth0_id = $1', [decoded.sub]);
+    if (!userResult.rows.length) return res.json({ consultations: [] });
+    const userId = userResult.rows[0].id;
+    const result = await pool.query(
+      'SELECT id, timestamp, chief_complaint, diagnosis, urgency FROM consultations WHERE user_id = $1 ORDER BY timestamp DESC LIMIT 20',
+      [userId]
+    );
+    res.json({ consultations: result.rows });
+  } catch (err) {
+    Sentry.captureException(err);
+    logger.error('History fetch error: ' + err.message);
+    res.status(500).json({ error: 'Failed to fetch history' });
+  }
+});
+
 // ── SAVE CONSULTATION ──
 app.post('/api/save-consultation', async (req, res) => {
   try {
-    const { name, age, gender, email, messages, sessionId } = req.body;
+    const { name, age, gender, email, messages, sessionId, userId } = req.body;
 
     const { diagnosis, urgency, chiefComplaint } = extractAssessment(messages || []);
 
@@ -396,9 +426,9 @@ app.post('/api/save-consultation', async (req, res) => {
       diagnosis,
       urgency,
       fullConversation,
-      sessionId: sessionId || Date.now().toString()
+      sessionId: sessionId || Date.now().toString(),
+      userId: userId || null
     });
-
     res.json({ success: true });
 
   } catch (err) {
