@@ -344,8 +344,10 @@ app.post('/api/auth/user', async (req, res) => {
   }
   try {
     const token = authHeader.split(' ')[1];
-    const decoded = await verifyAuth0Token(token);
-    const { sub: auth0Id, name, email, picture } = decoded;
+    const userInfo = await axios.get('https://' + auth0Domain + '/userinfo', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    const { sub: auth0Id, name, email, picture } = userInfo.data;
     const result = await pool.query(`
       INSERT INTO users (auth0_id, name, email, picture, preferred_language, last_active)
       VALUES ($1, $2, $3, $4, $5, NOW())
@@ -366,7 +368,6 @@ app.post('/api/auth/user', async (req, res) => {
     res.status(500).json({ error: 'Failed to save user' });
   }
 });
-
 // ── GET USER CONSULTATIONS (HISTORY) ──
 app.get('/api/user/consultations', async (req, res) => {
   const authHeader = req.headers.authorization;
@@ -374,9 +375,11 @@ app.get('/api/user/consultations', async (req, res) => {
     return res.status(401).json({ error: 'Authentication required' });
   }
   try {
-    const token = authHeader.split(' ')[1];
-    const decoded = await verifyAuth0Token(token);
-    const userResult = await pool.query('SELECT id FROM users WHERE auth0_id = $1', [decoded.sub]);
+   const token = authHeader.split(' ')[1];
+    const userInfo = await axios.get('https://' + auth0Domain + '/userinfo', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    const userResult = await pool.query('SELECT id FROM users WHERE auth0_id = $1', [userInfo.data.sub]);
     if (!userResult.rows.length) return res.json({ consultations: [] });
     const userId = userResult.rows[0].id;
     const result = await pool.query(
