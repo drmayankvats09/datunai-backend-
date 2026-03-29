@@ -230,7 +230,7 @@ function extractAssessment(messages) {
 app.get('/', (req, res) => {
   res.json({
     status: 'Datun AI Backend is Live 🦷',
-    version: '2.0.0',
+    version: '2.0.1',
     timestamp: new Date().toISOString()
   });
 });
