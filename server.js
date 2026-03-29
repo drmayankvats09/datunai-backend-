@@ -394,6 +394,33 @@ app.get('/api/user/consultations', async (req, res) => {
   }
 });
 
+// ── GET SINGLE CONSULTATION ──
+app.get('/api/user/consultation/:id', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  try {
+    const token = authHeader.split(' ')[1];
+    const userInfo = await axios.get('https://' + auth0Domain + '/userinfo', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    const userResult = await pool.query('SELECT id FROM users WHERE auth0_id = $1', [userInfo.data.sub]);
+    if (!userResult.rows.length) return res.status(404).json({ error: 'User not found' });
+    const userId = userResult.rows[0].id;
+    const result = await pool.query(
+      'SELECT * FROM consultations WHERE id = $1 AND user_id = $2',
+      [req.params.id, userId]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Consultation not found' });
+    res.json({ consultation: result.rows[0] });
+  } catch (err) {
+    Sentry.captureException(err);
+    logger.error('Consultation fetch error: ' + err.message);
+    res.status(500).json({ error: 'Failed to fetch consultation' });
+  }
+});
+
 // ── SAVE CONSULTATION ──
 app.post('/api/save-consultation', async (req, res) => {
   try {
