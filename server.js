@@ -432,7 +432,7 @@ app.post('/api/save-consultation', async (req, res) => {
       .filter(m => typeof m.content === 'string')
       .map(m => `${m.role === 'user' ? 'Patient' : 'Datun AI'}: ${m.content}`)
       .join('\n---\n')
-      .slice(0, 5000);
+      .slice(0, 50000);
 
     await saveToSheets({
       timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
