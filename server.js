@@ -383,7 +383,7 @@ app.get('/api/user/consultations', async (req, res) => {
     if (!userResult.rows.length) return res.json({ consultations: [] });
     const userId = userResult.rows[0].id;
     const result = await pool.query(
-      'SELECT id, timestamp, chief_complaint, diagnosis, urgency FROM consultations WHERE user_id = $1 ORDER BY timestamp DESC LIMIT 20',
+      'SELECT id, timestamp, chief_complaint, diagnosis, urgency, age, gender FROM consultations WHERE user_id = $1 ORDER BY timestamp DESC LIMIT 20',
       [userId]
     );
     res.json({ consultations: result.rows });
