@@ -179,10 +179,10 @@ async function saveToSheets(data) {
 // ── SAVE TO POSTGRESQL ──
 async function saveToDatabase(data) {
   try {
-    await pool.query(
+    const res = await pool.query(
       `INSERT INTO consultations 
         (name, age, gender, email, chief_complaint, diagnosis, urgency, full_conversation, session_id, user_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
       [
         data.name || '',
         data.age || '',
@@ -196,10 +196,18 @@ async function saveToDatabase(data) {
         data.userId || null
       ]
     );
-    logger.info('Saved to PostgreSQL: ' + data.name + ' ' + data.email);
+    
+    // Get the newly generated ID
+    const newId = res.rows[0].id;
+    logger.info('Saved to PostgreSQL with ID ' + newId + ': ' + data.name);
+    
+    // Return the ID so other functions can use it
+    return newId;
+    
   } catch (err) {
     Sentry.captureException(err);
     logger.error('DB save error: ' + err.message);
+    throw err; // Important: Throw the error so the calling function knows it failed
   }
 }
 
@@ -465,7 +473,8 @@ app.post('/api/save-consultation', async (req, res) => {
       sessionId: sessionId || Date.now().toString()
     });
 
-    await saveToDatabase({
+    // Save to PostgreSQL and capture the newly generated ID
+    const newConsultationId = await saveToDatabase({
       name,
       age,
       gender,
@@ -477,12 +486,41 @@ app.post('/api/save-consultation', async (req, res) => {
       sessionId: sessionId || Date.now().toString(),
       userId: userId || null
     });
-    res.json({ success: true });
+    
+    // Return the generated ID back to the frontend
+    res.json({ success: true, consultationId: newConsultationId });
 
   } catch (err) {
     Sentry.captureException(err);
     logger.error('Save error: ' + err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ── PDF REPORT GENERATION ENDPOINT ──
+app.get('/api/consultations/:id/pdf', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Fetch consultation data by ID from PostgreSQL
+    const result = await pool.query('SELECT * FROM consultations WHERE id = $1', [id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Consultation report not found." });
+    }
+    
+    const consultation = result.rows[0];
+    
+    // Set headers to force PDF download in the browser
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=DatunAI_Report_${id}.pdf`);
+    
+    // Generate the branded PDF and stream it to the client
+    generateConsultationPDF(consultation, res);
+    
+  } catch (err) {
+    logger.error(`PDF generation error: ${err.message}`);
+    res.status(500).json({ error: "Failed to generate PDF report." });
   }
 });
 
