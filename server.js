@@ -16,6 +16,7 @@ const { google } = require('googleapis');
 const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
 const jwksClient = require('jwks-rsa');
+const { generateConsultationPDF } = require('./utils/generateReport');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -391,6 +392,23 @@ app.get('/api/user/consultations', async (req, res) => {
     Sentry.captureException(err);
     logger.error('History fetch error: ' + err.message);
     res.status(500).json({ error: 'Failed to fetch history' });
+  }
+});
+
+// Task 19: PDF Generation Endpoint
+app.get('/api/consultations/:id/pdf', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query('SELECT * FROM consultations WHERE id = $1', [id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: "Report not found" });
+    
+    const consultation = result.rows[0];
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=DatunAI_Report_${id}.pdf`);
+    
+    generateConsultationPDF(consultation, res);
+  } catch (err) {
+    res.status(500).json({ error: "PDF generation failed" });
   }
 });
 
