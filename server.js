@@ -97,6 +97,7 @@ function verifyAuth0Token(token) {
 
 async function initDB() {
   try {
+    // 1. Basic table creation (agar bilkul nayi DB ho)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -110,7 +111,6 @@ async function initDB() {
       )
     `);
     
-    // Yahan saare naye columns pehle se list kar diye hain
     await pool.query(`
       CREATE TABLE IF NOT EXISTS consultations (
         id SERIAL PRIMARY KEY,
@@ -124,23 +124,23 @@ async function initDB() {
         urgency VARCHAR(50),
         full_conversation TEXT,
         session_id VARCHAR(255),
-        user_id UUID REFERENCES users(id),
-        location TEXT,
-        pain_scale TEXT,
-        medical_history TEXT,
-        allergies TEXT,
-        dental_history TEXT,
-        provisional_diagnosis TEXT,
-        investigations TEXT,
-        treatment_plan TEXT,
-        medications TEXT,
-        home_remedies TEXT,
-        dos_and_donts TEXT,
-        red_flags TEXT
+        user_id UUID REFERENCES users(id)
       )
     `);
-    
-    logger.info('PostgreSQL connected & table ready');
+
+    // 🔥 2. FORCE UPDATE COLUMNS (Asli Magic Yahan Hai)
+    const newColumns = [
+      'location', 'pain_scale', 'medical_history', 'allergies', 
+      'dental_history', 'provisional_diagnosis', 'investigations', 
+      'treatment_plan', 'medications', 'home_remedies', 'dos_and_donts', 'red_flags'
+    ];
+
+    for (const col of newColumns) {
+      // Ye query har column ko check karke add karegi
+      await pool.query(`ALTER TABLE consultations ADD COLUMN IF NOT EXISTS ${col} TEXT;`);
+    }
+
+    logger.info('PostgreSQL connected & ALL columns successfully updated! 🚀');
   } catch (err) {
     Sentry.captureException(err);
     logger.error('DB init error: ' + err.message);
