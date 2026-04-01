@@ -294,7 +294,7 @@ app.post('/api/chat', async (req, res) => {
         const response = await axios.post(
           'https://api.anthropic.com/v1/messages',
           {
-            model: 'claude-4-6-sonnet-20260217', // 
+            model: 'claude-3-5-sonnet-20241022', // 
             max_tokens: 2000,
             system: [
               {
@@ -327,7 +327,7 @@ app.post('/api/chat', async (req, res) => {
 
     // All retries failed
     Sentry.captureException(lastError);
-    logger.error('Chat error after 3 attempts: ' + (lastError.response?.data || lastError.message));
+    logger.error('Chat error after 3 attempts: ' + JSON.stringify(lastError.response?.data || lastError.message));
 
     if (lastError.response?.status === 401) {
       return res.status(500).json({ error: 'API authentication failed' });
