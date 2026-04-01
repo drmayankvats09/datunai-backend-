@@ -96,8 +96,16 @@ function verifyAuth0Token(token) {
 }
 
 async function initDB() {
+  logger.info('🔄 DB Initialization started...'); // Step 1
   try {
-    // 1. Basic table creation (agar bilkul nayi DB ho)
+    logger.info('⏳ Connecting to Pool...'); // Step 2
+    
+    // Test connection immediately
+    const client = await pool.connect();
+    logger.info('✅ Physical Connection Established!'); // Step 3
+    client.release();
+
+    logger.info('🔨 Syncing Users Table...');
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -111,6 +119,7 @@ async function initDB() {
       )
     `);
     
+    logger.info('🔨 Syncing Consultations Table...');
     await pool.query(`
       CREATE TABLE IF NOT EXISTS consultations (
         id SERIAL PRIMARY KEY,
@@ -128,22 +137,23 @@ async function initDB() {
       )
     `);
 
-    // 🔥 2. FORCE UPDATE COLUMNS (Asli Magic Yahan Hai)
     const newColumns = [
       'location', 'pain_scale', 'medical_history', 'allergies', 
       'dental_history', 'provisional_diagnosis', 'investigations', 
       'treatment_plan', 'medications', 'home_remedies', 'dos_and_donts', 'red_flags'
     ];
 
+    logger.info('🔨 Checking for missing columns...');
     for (const col of newColumns) {
-      // Ye query har column ko check karke add karegi
       await pool.query(`ALTER TABLE consultations ADD COLUMN IF NOT EXISTS ${col} TEXT;`);
     }
 
-    logger.info('PostgreSQL connected & ALL columns successfully updated! 🚀');
+    logger.info('🚀 PostgreSQL connected & ALL columns successfully updated!'); 
   } catch (err) {
     Sentry.captureException(err);
-    logger.error('DB init error: ' + err.message);
+    logger.error('❌ DB init error: ' + err.message);
+    // Agar error aaye toh poora stack trace print karo taaki humein wajah mile
+    console.error(err); 
   }
 }
 
