@@ -315,6 +315,7 @@ app.post('/api/chat', async (req, res) => {
             timeout: 60000
           }
         );
+        console.log("Token Usage:", JSON.stringify(response.data.usage));
         return res.json(response.data);
       } catch (err) {
         lastError = err;
