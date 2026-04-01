@@ -109,6 +109,8 @@ async function initDB() {
         last_active TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+    
+    // Yahan saare naye columns pehle se list kar diye hain
     await pool.query(`
       CREATE TABLE IF NOT EXISTS consultations (
         id SERIAL PRIMARY KEY,
@@ -122,28 +124,23 @@ async function initDB() {
         urgency VARCHAR(50),
         full_conversation TEXT,
         session_id VARCHAR(255),
-        user_id UUID REFERENCES users(id)
+        user_id UUID REFERENCES users(id),
+        location TEXT,
+        pain_scale TEXT,
+        medical_history TEXT,
+        allergies TEXT,
+        dental_history TEXT,
+        provisional_diagnosis TEXT,
+        investigations TEXT,
+        treatment_plan TEXT,
+        medications TEXT,
+        home_remedies TEXT,
+        dos_and_donts TEXT,
+        red_flags TEXT
       )
     `);
     
-    // 🔥 NAYE COLUMNS ADD KARNE KI QUERY (Purana data safe rahega)
-    await pool.query(`
-      ALTER TABLE consultations 
-      ADD COLUMN IF NOT EXISTS location TEXT,
-      ADD COLUMN IF NOT EXISTS pain_scale TEXT,
-      ADD COLUMN IF NOT EXISTS medical_history TEXT,
-      ADD COLUMN IF NOT EXISTS allergies TEXT,
-      ADD COLUMN IF NOT EXISTS dental_history TEXT,
-      ADD COLUMN IF NOT EXISTS provisional_diagnosis TEXT,
-      ADD COLUMN IF NOT EXISTS investigations TEXT,
-      ADD COLUMN IF NOT EXISTS treatment_plan TEXT,
-      ADD COLUMN IF NOT EXISTS medications TEXT,
-      ADD COLUMN IF NOT EXISTS home_remedies TEXT,
-      ADD COLUMN IF NOT EXISTS dos_and_donts TEXT,
-      ADD COLUMN IF NOT EXISTS red_flags TEXT;
-    `);
-
-    logger.info('PostgreSQL connected & all columns ready');
+    logger.info('PostgreSQL connected & table ready');
   } catch (err) {
     Sentry.captureException(err);
     logger.error('DB init error: ' + err.message);
