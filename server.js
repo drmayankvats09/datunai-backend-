@@ -125,13 +125,30 @@ async function initDB() {
         user_id UUID REFERENCES users(id)
       )
     `);
-    logger.info('PostgreSQL connected & table ready');
+    
+    // 🔥 NAYE COLUMNS ADD KARNE KI QUERY (Purana data safe rahega)
+    await pool.query(`
+      ALTER TABLE consultations 
+      ADD COLUMN IF NOT EXISTS location TEXT,
+      ADD COLUMN IF NOT EXISTS pain_scale TEXT,
+      ADD COLUMN IF NOT EXISTS medical_history TEXT,
+      ADD COLUMN IF NOT EXISTS allergies TEXT,
+      ADD COLUMN IF NOT EXISTS dental_history TEXT,
+      ADD COLUMN IF NOT EXISTS provisional_diagnosis TEXT,
+      ADD COLUMN IF NOT EXISTS investigations TEXT,
+      ADD COLUMN IF NOT EXISTS treatment_plan TEXT,
+      ADD COLUMN IF NOT EXISTS medications TEXT,
+      ADD COLUMN IF NOT EXISTS home_remedies TEXT,
+      ADD COLUMN IF NOT EXISTS dos_and_donts TEXT,
+      ADD COLUMN IF NOT EXISTS red_flags TEXT;
+    `);
+
+    logger.info('PostgreSQL connected & all columns ready');
   } catch (err) {
     Sentry.captureException(err);
     logger.error('DB init error: ' + err.message);
   }
 }
-initDB();
 
 // ── GOOGLE SHEETS SETUP ──
 const SHEET_ID = process.env.GOOGLE_SHEET_ID || process.env.GOOGLE_SHEETS_ID;
@@ -177,12 +194,15 @@ async function saveToSheets(data) {
 }
 
 // ── SAVE TO POSTGRESQL ──
+// ── SAVE TO POSTGRESQL ──
 async function saveToDatabase(data) {
   try {
     const res = await pool.query(
       `INSERT INTO consultations 
-        (name, age, gender, email, chief_complaint, diagnosis, urgency, full_conversation, session_id, user_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+        (name, age, gender, email, chief_complaint, diagnosis, urgency, full_conversation, session_id, user_id, 
+         location, pain_scale, medical_history, allergies, dental_history, provisional_diagnosis, 
+         investigations, treatment_plan, medications, home_remedies, dos_and_donts, red_flags)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) RETURNING id`,
       [
         data.name || '',
         data.age || '',
@@ -193,21 +213,30 @@ async function saveToDatabase(data) {
         data.urgency || '',
         data.fullConversation || '',
         data.sessionId || '',
-        data.userId || null
+        data.userId || null,
+        data.location || 'Not reported',
+        data.pain_scale || 'Not reported',
+        data.medical_history || 'Not reported',
+        data.allergies || 'Not reported',
+        data.dental_history || 'Not reported',
+        data.provisional_diagnosis || 'Pending',
+        data.investigations || 'Not reported',
+        data.treatment_plan || 'Not reported',
+        data.medications || 'Not reported',
+        data.home_remedies || 'Not reported',
+        data.dos_and_donts || 'Not reported',
+        data.red_flags || 'None'
       ]
     );
     
-    // Get the newly generated ID
     const newId = res.rows[0].id;
     logger.info('Saved to PostgreSQL with ID ' + newId + ': ' + data.name);
-    
-    // Return the ID so other functions can use it
     return newId;
     
   } catch (err) {
     Sentry.captureException(err);
     logger.error('DB save error: ' + err.message);
-    throw err; // Important: Throw the error so the calling function knows it failed
+    throw err;
   }
 }
 
@@ -458,7 +487,13 @@ app.get('/api/user/consultation/:id', async (req, res) => {
 // ── SAVE CONSULTATION ──
 app.post('/api/save-consultation', async (req, res) => {
   try {
-    const { name, age, gender, email, messages, sessionId, userId } = req.body;
+    // 🔥 Naya data (location, pain_scale etc) bhi extract kar rahe hain
+    const { 
+      name, age, gender, email, messages, sessionId, userId,
+      location, pain_scale, medical_history, allergies, dental_history, 
+      provisional_diagnosis, investigations, treatment_plan, medications, 
+      home_remedies, dos_and_donts, red_flags
+    } = req.body;
 
     const { diagnosis, urgency, chiefComplaint } = extractAssessment(messages || []);
 
@@ -481,21 +516,16 @@ app.post('/api/save-consultation', async (req, res) => {
       sessionId: sessionId || Date.now().toString()
     });
 
-    // Save to PostgreSQL and capture the newly generated ID
+    // 🔥 Naya data ab saveToDatabase ko jaa raha hai
     const newConsultationId = await saveToDatabase({
-      name,
-      age,
-      gender,
-      email,
-      chiefComplaint,
-      diagnosis,
-      urgency,
-      fullConversation,
+      name, age, gender, email, chiefComplaint, diagnosis, urgency, fullConversation, 
       sessionId: sessionId || Date.now().toString(),
-      userId: userId || null
+      userId: userId || null,
+      location, pain_scale, medical_history, allergies, dental_history, 
+      provisional_diagnosis, investigations, treatment_plan, medications, 
+      home_remedies, dos_and_donts, red_flags
     });
     
-    // Return the generated ID back to the frontend
     res.json({ success: true, consultationId: newConsultationId });
 
   } catch (err) {
