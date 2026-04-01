@@ -570,13 +570,25 @@ app.get('/api/consultations/:id/pdf', async (req, res) => {
 });
 
 // ── START SERVER ──
-app.listen(PORT, () => {
-  console.log(`
+const startServer = async () => {
+  try {
+    // Pehle DB setup karo
+    await initDB(); 
+    
+    app.listen(PORT, () => {
+      console.log(`
   ╔═══════════════════════════════════════╗
-  ║       Datun AI Backend Running 🦷      ║
-  ║       Port: ${PORT}                      ║
-  ║       Version: 2.0.0                  ║
-  ║       Sheets: Connected               ║
+  ║        Datun AI Backend Running 🦷      ║
+  ║        Port: ${PORT}                      ║
+  ║        Version: 2.0.1                  ║
+  ║        Sheets: Connected               ║
   ╚═══════════════════════════════════════╝
-  `);
-});
+      `);
+    });
+  } catch (error) {
+    logger.error("Failed to start server: " + error.message);
+    process.exit(1);
+  }
+};
+
+startServer();;
