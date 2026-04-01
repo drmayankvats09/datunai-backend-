@@ -294,16 +294,23 @@ app.post('/api/chat', async (req, res) => {
         const response = await axios.post(
           'https://api.anthropic.com/v1/messages',
           {
-            model: 'claude-sonnet-4-20250514',
+            model: 'claude-4-6-sonnet-20260217', // 
             max_tokens: 2000,
-            system: system || '',
+            system: [
+              {
+                type: "text",
+                text: system || '',
+                cache_control: { type: "ephemeral" } // 
+              }
+            ],
             messages: messages
           },
           {
             headers: {
               'Content-Type': 'application/json',
               'x-api-key': process.env.ANTHROPIC_API_KEY,
-              'anthropic-version': '2023-06-01'
+              'anthropic-version': '2023-06-01',
+              'anthropic-beta': 'prompt-caching-2024-07-31' // 
             },
             timeout: 60000
           }
