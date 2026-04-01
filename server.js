@@ -294,7 +294,7 @@ app.post('/api/chat', async (req, res) => {
         const response = await axios.post(
           'https://api.anthropic.com/v1/messages',
           {
-            model: 'claude-3-5-sonnet-20241022', // 
+            model: 'claude-4-6-sonnet-20260217', // 
             max_tokens: 2000,
             system: [
               {
