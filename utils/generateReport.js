@@ -93,7 +93,7 @@ function generateConsultationPDF(data, stream) {
   var age=data.age||'--';
   var gender=cap(data.gender||'--');
   var email=data.email||'--';
-  var dateStr=data.timestamp?new Date(data.timestamp).toLocaleString('en-IN',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:true}):new Date().toLocaleString('en-IN');
+  var dateStr=data.timestamp?new Date(data.timestamp).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:true}):new Date().toLocaleString('en-IN',{timeZone:'Asia/Kolkata'});
   var reportId='DTN-'+(data.id||Date.now().toString().slice(-6));
   var complaint=cap(data.chief_complaint||'Not Specified');
   var location=cap(data.location||'Not Reported');
