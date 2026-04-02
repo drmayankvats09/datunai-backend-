@@ -350,7 +350,7 @@ function generateConsultationPDF(data, stream) {
   checkPage(120);
   
   // Push to bottom area
-  if(doc.y<725)doc.y=725;
+  if(doc.y<715)doc.y=715;
   
   doc.moveTo(M,doc.y).lineTo(W-M,doc.y).lineWidth(0.3).strokeColor(grayBdr).stroke();
   doc.moveDown(0.4);
