@@ -455,11 +455,47 @@ app.get('/api/consultations/:id/pdf', async (req, res) => {
     if (result.rows.length === 0) return res.status(404).json({ error: "Report not found" });
     
     const consultation = result.rows[0];
+    
+    // Translate non-English fields to English for PDF
+    const fieldsToTranslate = ['chief_complaint','diagnosis','provisional_diagnosis','medications','home_remedies','dos_and_donts','treatment_plan','investigations','medical_history','allergies','dental_history','red_flags','location','pain_scale'];
+    const hasNonEnglish = fieldsToTranslate.some(f => consultation[f] && /[^\x00-\x7F]/.test(consultation[f]));
+    
+    if(hasNonEnglish && process.env.ANTHROPIC_API_KEY){
+      try {
+        const dataToTranslate = {};
+        fieldsToTranslate.forEach(f => { if(consultation[f]) dataToTranslate[f] = consultation[f]; });
+        
+        const transResponse = await axios.post('https://api.anthropic.com/v1/messages', {
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 2000,
+          messages: [{
+            role: 'user',
+            content: 'Translate the following medical/dental data to English. Keep medical terms, drug names, and dosages as-is. Return ONLY valid JSON with same keys. No markdown, no backticks, no explanation.\n\n' + JSON.stringify(dataToTranslate)
+          }]
+        }, {
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': process.env.ANTHROPIC_API_KEY,
+            'anthropic-version': '2023-06-01'
+          },
+          timeout: 30000
+        });
+        
+        const transText = transResponse.data.content[0].text.trim();
+        const translated = JSON.parse(transText);
+        fieldsToTranslate.forEach(f => { if(translated[f]) consultation[f] = translated[f]; });
+        logger.info('PDF translated to English for consultation ' + id);
+      } catch(te) {
+        logger.warn('Translation failed, generating PDF with original text: ' + te.message);
+      }
+    }
+    
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=DatunAI_Report_${id}.pdf`);
     
     generateConsultationPDF(consultation, res);
   } catch (err) {
+    logger.error('PDF generation error: ' + err.message);
     res.status(500).json({ error: "PDF generation failed" });
   }
 });
@@ -542,33 +578,58 @@ app.post('/api/save-consultation', async (req, res) => {
   }
 });
 
-// ── PDF REPORT GENERATION ENDPOINT ──
+// Task 19: PDF Generation Endpoint
 app.get('/api/consultations/:id/pdf', async (req, res) => {
   try {
     const { id } = req.params;
-    
-    // Fetch consultation data by ID from PostgreSQL
     const result = await pool.query('SELECT * FROM consultations WHERE id = $1', [id]);
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: "Consultation report not found." });
-    }
+    if (result.rows.length === 0) return res.status(404).json({ error: "Report not found" });
     
     const consultation = result.rows[0];
     
-    // Set headers to force PDF download in the browser
+    // Translate non-English fields to English for PDF
+    const fieldsToTranslate = ['chief_complaint','diagnosis','provisional_diagnosis','medications','home_remedies','dos_and_donts','treatment_plan','investigations','medical_history','allergies','dental_history','red_flags','location','pain_scale'];
+    const hasNonEnglish = fieldsToTranslate.some(f => consultation[f] && /[^\x00-\x7F]/.test(consultation[f]));
+    
+    if(hasNonEnglish && process.env.ANTHROPIC_API_KEY){
+      try {
+        const dataToTranslate = {};
+        fieldsToTranslate.forEach(f => { if(consultation[f]) dataToTranslate[f] = consultation[f]; });
+        
+        const transResponse = await axios.post('https://api.anthropic.com/v1/messages', {
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 2000,
+          messages: [{
+            role: 'user',
+            content: 'Translate the following medical/dental data to English. Keep medical terms, drug names, and dosages as-is. Return ONLY valid JSON with same keys. No markdown, no backticks, no explanation.\n\n' + JSON.stringify(dataToTranslate)
+          }]
+        }, {
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': process.env.ANTHROPIC_API_KEY,
+            'anthropic-version': '2023-06-01'
+          },
+          timeout: 30000
+        });
+        
+        const transText = transResponse.data.content[0].text.trim();
+        const translated = JSON.parse(transText);
+        fieldsToTranslate.forEach(f => { if(translated[f]) consultation[f] = translated[f]; });
+        logger.info('PDF translated to English for consultation ' + id);
+      } catch(te) {
+        logger.warn('Translation failed, generating PDF with original text: ' + te.message);
+      }
+    }
+    
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=DatunAI_Report_${id}.pdf`);
     
-    // Generate the branded PDF and stream it to the client
     generateConsultationPDF(consultation, res);
-    
   } catch (err) {
-    logger.error(`PDF generation error: ${err.message}`);
-    res.status(500).json({ error: "Failed to generate PDF report." });
+    logger.error('PDF generation error: ' + err.message);
+    res.status(500).json({ error: "PDF generation failed" });
   }
 });
-
 // ── START SERVER ──
 const startServer = async () => {
   try {
