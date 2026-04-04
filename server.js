@@ -17,6 +17,7 @@ const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
 const jwksClient = require('jwks-rsa');
 const { generateConsultationPDF } = require('./utils/generateReport');
+const cron = require('node-cron');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -142,6 +143,11 @@ async function initDB() {
       'dental_history', 'provisional_diagnosis', 'investigations', 
       'treatment_plan', 'medications', 'home_remedies', 'dos_and_donts', 'red_flags'
     ];
+    
+    // WhatsApp system columns
+    await pool.query(`ALTER TABLE consultations ADD COLUMN IF NOT EXISTS phone_number VARCHAR(20);`);
+    await pool.query(`ALTER TABLE consultations ADD COLUMN IF NOT EXISTS follow_up_3day_sent BOOLEAN DEFAULT FALSE;`);
+    await pool.query(`ALTER TABLE consultations ADD COLUMN IF NOT EXISTS follow_up_7day_sent BOOLEAN DEFAULT FALSE;`);
 
     logger.info('🔨 Checking for missing columns...');
     for (const col of newColumns) {
@@ -201,15 +207,14 @@ async function saveToSheets(data) {
 }
 
 // ── SAVE TO POSTGRESQL ──
-// ── SAVE TO POSTGRESQL ──
 async function saveToDatabase(data) {
   try {
     const res = await pool.query(
       `INSERT INTO consultations 
         (name, age, gender, email, chief_complaint, diagnosis, urgency, full_conversation, session_id, user_id, 
          location, pain_scale, medical_history, allergies, dental_history, provisional_diagnosis, 
-         investigations, treatment_plan, medications, home_remedies, dos_and_donts, red_flags)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) RETURNING id`,
+         investigations, treatment_plan, medications, home_remedies, dos_and_donts, red_flags, phone_number)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23) RETURNING id`,
       [
         data.name || '',
         data.age || '',
@@ -232,7 +237,8 @@ async function saveToDatabase(data) {
         data.medications || 'Not reported',
         data.home_remedies || 'Not reported',
         data.dos_and_donts || 'Not reported',
-        data.red_flags || 'None'
+        data.red_flags || 'None',
+        data.phoneNumber || ''
       ]
     );
     
@@ -559,15 +565,33 @@ app.post('/api/save-consultation', async (req, res) => {
       sessionId: sessionId || Date.now().toString()
     });
 
-    // 🔥 Naya data ab saveToDatabase ko jaa raha hai
+    const phoneNumber = req.body.phoneNumber || '';
+
     const newConsultationId = await saveToDatabase({
       name, age, gender, email, chiefComplaint, diagnosis, urgency, fullConversation, 
       sessionId: sessionId || Date.now().toString(),
       userId: userId || null,
       location, pain_scale, medical_history, allergies, dental_history, 
       provisional_diagnosis, investigations, treatment_plan, medications, 
-      home_remedies, dos_and_donts, red_flags
+      home_remedies, dos_and_donts, red_flags, phoneNumber
     });
+
+    // ── WHATSAPP NOTIFICATIONS ──
+    if (phoneNumber && diagnosis) {
+      const patientPhone = phoneNumber.startsWith('91') ? phoneNumber : '91' + phoneNumber.replace(/^0+/, '');
+      
+      // 1. Patient ko — Consultation Complete
+      await sendWhatsApp(patientPhone,
+        `Namaste ${name || ''} ji! 😊\n\nAapki Datun AI dental consultation complete hui.\n\n🩺 Diagnosis: ${diagnosis}\n⚡ Urgency: ${urgency || 'ROUTINE'}\n\n📋 PDF Report: https://dentscan-ai-backend-production.up.railway.app/api/consultations/${newConsultationId}/pdf\n\nHumari team jald connect karegi.\n📞 +91 87960 64170\n🔗 www.datunai.com\n\n—\n\nHello ${name || ''}! 😊\n\nYour Datun AI consultation is complete.\n\n🩺 Diagnosis: ${diagnosis}\n⚡ Urgency: ${urgency || 'ROUTINE'}\n\n📋 PDF Report: https://dentscan-ai-backend-production.up.railway.app/api/consultations/${newConsultationId}/pdf\n\nOur team will connect shortly.\n📞 +91 87960 64170\n🔗 www.datunai.com\n\n— Datun AI`
+      );
+
+      // 2. Internal Alert — Tujhe (8796064170 pe)
+      await sendWhatsApp('918796064170',
+        `🚨 NEW PATIENT ALERT\n\n👤 Name: ${name || 'Unknown'}\n📞 Phone: ${phoneNumber}\n📧 Email: ${email || 'N/A'}\n🩺 Diagnosis: ${diagnosis}\n⚡ Urgency: ${urgency || 'ROUTINE'}\n🎂 Age: ${age || 'N/A'}\n⚧ Gender: ${gender || 'N/A'}\n\n📋 PDF: https://dentscan-ai-backend-production.up.railway.app/api/consultations/${newConsultationId}/pdf\n\n— Datun AI System`
+      );
+
+      logger.info('WhatsApp notifications sent for consultation: ' + newConsultationId);
+    }
     
     res.json({ success: true, consultationId: newConsultationId });
 
@@ -578,58 +602,58 @@ app.post('/api/save-consultation', async (req, res) => {
   }
 });
 
-// Task 19: PDF Generation Endpoint
-app.get('/api/consultations/:id/pdf', async (req, res) => {
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// CRON JOBS — Automated Follow-ups
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// Daily 10am IST — 3-day follow-up
+cron.schedule('0 10 * * *', async () => {
+  logger.info('Running 3-day follow-up cron...');
   try {
-    const { id } = req.params;
-    const result = await pool.query('SELECT * FROM consultations WHERE id = $1', [id]);
-    if (result.rows.length === 0) return res.status(404).json({ error: "Report not found" });
-    
-    const consultation = result.rows[0];
-    
-    // Translate non-English fields to English for PDF
-    const fieldsToTranslate = ['chief_complaint','diagnosis','provisional_diagnosis','medications','home_remedies','dos_and_donts','treatment_plan','investigations','medical_history','allergies','dental_history','red_flags','location','pain_scale'];
-    const hasNonEnglish = fieldsToTranslate.some(f => consultation[f] && /[^\x00-\x7F]/.test(consultation[f]));
-    
-    if(hasNonEnglish && process.env.ANTHROPIC_API_KEY){
-      try {
-        const dataToTranslate = {};
-        fieldsToTranslate.forEach(f => { if(consultation[f]) dataToTranslate[f] = consultation[f]; });
-        
-        const transResponse = await axios.post('https://api.anthropic.com/v1/messages', {
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 2000,
-          messages: [{
-            role: 'user',
-            content: 'Translate the following medical/dental data to English. Keep medical terms, drug names, and dosages as-is. Return ONLY valid JSON with same keys. No markdown, no backticks, no explanation.\n\n' + JSON.stringify(dataToTranslate)
-          }]
-        }, {
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': process.env.ANTHROPIC_API_KEY,
-            'anthropic-version': '2023-06-01'
-          },
-          timeout: 30000
-        });
-        
-        const transText = transResponse.data.content[0].text.trim();
-        const translated = JSON.parse(transText);
-        fieldsToTranslate.forEach(f => { if(translated[f]) consultation[f] = translated[f]; });
-        logger.info('PDF translated to English for consultation ' + id);
-      } catch(te) {
-        logger.warn('Translation failed, generating PDF with original text: ' + te.message);
-      }
+    const result = await pool.query(
+      `SELECT id, name, phone_number, chief_complaint FROM consultations 
+       WHERE timestamp::date = (NOW() - INTERVAL '3 days')::date 
+       AND phone_number IS NOT NULL AND phone_number != '' 
+       AND follow_up_3day_sent = FALSE`
+    );
+    for (const row of result.rows) {
+      const phone = row.phone_number.startsWith('91') ? row.phone_number : '91' + row.phone_number.replace(/^0+/, '');
+      await sendWhatsApp(phone,
+        `Namaste ${row.name || ''} ji! 😊\n\n3 din pehle aapne Datun AI se dental consult kiya tha.\n\nAb kaisa hai? Dentist ke paas gaye?\n\nDobara consult karein:\n🔗 www.datunai.com\n📞 +91 87960 64170\n\n—\n\nHello ${row.name || ''}! 😊\n\nIt's been 3 days since your dental consultation.\n\nHow are you feeling? Did you visit a dentist?\n\nConsult again:\n🔗 www.datunai.com\n📞 +91 87960 64170\n\n— Datun AI`
+      );
+      await pool.query('UPDATE consultations SET follow_up_3day_sent = TRUE WHERE id = $1', [row.id]);
+      logger.info('3-day follow-up sent to: ' + row.phone_number);
     }
-    
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename=DatunAI_Report_${id}.pdf`);
-    
-    generateConsultationPDF(consultation, res);
   } catch (err) {
-    logger.error('PDF generation error: ' + err.message);
-    res.status(500).json({ error: "PDF generation failed" });
+    logger.error('3-day cron error: ' + err.message);
+    Sentry.captureException(err);
   }
-});
+}, { timezone: 'Asia/Kolkata' });
+
+// Daily 10am IST — 7-day follow-up
+cron.schedule('30 10 * * *', async () => {
+  logger.info('Running 7-day follow-up cron...');
+  try {
+    const result = await pool.query(
+      `SELECT id, name, phone_number, chief_complaint FROM consultations 
+       WHERE timestamp::date = (NOW() - INTERVAL '7 days')::date 
+       AND phone_number IS NOT NULL AND phone_number != '' 
+       AND follow_up_7day_sent = FALSE`
+    );
+    for (const row of result.rows) {
+      const phone = row.phone_number.startsWith('91') ? row.phone_number : '91' + row.phone_number.replace(/^0+/, '');
+      await sendWhatsApp(phone,
+        `Namaste ${row.name || ''} ji! 🦷\n\nEk hafte pehle aapko "${row.chief_complaint || 'dental'}" ki takleef thi.\n\nDentist se mile? Agar nahi toh hum help kar sakte hain:\n📞 +91 87960 64170\n🔗 www.datunai.com\n\n—\n\nHello ${row.name || ''}! 🦷\n\nA week ago you consulted for "${row.chief_complaint || 'dental issue'}".\n\nHave you seen a dentist? We can help:\n📞 +91 87960 64170\n🔗 www.datunai.com\n\n— Datun AI`
+      );
+      await pool.query('UPDATE consultations SET follow_up_7day_sent = TRUE WHERE id = $1', [row.id]);
+      logger.info('7-day follow-up sent to: ' + row.phone_number);
+    }
+  } catch (err) {
+    logger.error('7-day cron error: ' + err.message);
+    Sentry.captureException(err);
+  }
+}, { timezone: 'Asia/Kolkata' });
+
 // ── START SERVER ──
 const startServer = async () => {
   try {
