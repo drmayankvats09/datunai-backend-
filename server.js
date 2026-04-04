@@ -652,4 +652,86 @@ const startServer = async () => {
   }
 };
 
-startServer();;
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// DATUN AI — WhatsApp Cloud API Integration
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// ── SEND WHATSAPP MESSAGE HELPER ──
+async function sendWhatsApp(to, body) {
+  try {
+    await axios.post(
+      `https://graph.facebook.com/v19.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      { messaging_product: 'whatsapp', to, type: 'text', text: { body } },
+      { headers: { 'Authorization': `Bearer ${process.env.WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' } }
+    );
+    logger.info('WhatsApp message sent to: ' + to);
+  } catch (err) {
+    logger.error('WhatsApp send error: ' + err.message);
+    Sentry.captureException(err);
+  }
+}
+
+// ── SEND WHATSAPP TEMPLATE HELPER ──
+async function sendWhatsAppTemplate(to, templateName, components) {
+  try {
+    await axios.post(
+      `https://graph.facebook.com/v19.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        messaging_product: 'whatsapp',
+        to,
+        type: 'template',
+        template: {
+          name: templateName,
+          language: { code: 'en' },
+          components: components || []
+        }
+      },
+      { headers: { 'Authorization': `Bearer ${process.env.WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' } }
+    );
+    logger.info('WhatsApp template sent: ' + templateName + ' to ' + to);
+  } catch (err) {
+    logger.error('WhatsApp template error: ' + err.message);
+    Sentry.captureException(err);
+  }
+}
+
+// ── WEBHOOK VERIFY (Meta calls this to verify your endpoint) ──
+app.get('/webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+  if (mode === 'subscribe' && token === process.env.WHATSAPP_VERIFY_TOKEN) {
+    logger.info('Webhook verified successfully');
+    res.status(200).send(challenge);
+  } else {
+    res.sendStatus(403);
+  }
+});
+
+// ── WEBHOOK RECEIVE (When patient replies on WhatsApp) ──
+app.post('/webhook', async (req, res) => {
+  try {
+    const entry = req.body?.entry?.[0];
+    const change = entry?.changes?.[0];
+    const message = change?.value?.messages?.[0];
+    if (!message) return res.sendStatus(200);
+
+    const from = message.from;
+    const msgBody = message?.text?.body?.trim() || '';
+    if (!msgBody) return res.sendStatus(200);
+
+    logger.info('WhatsApp message received from: ' + from + ' — ' + msgBody);
+    
+      // Auto-reply: Direct patient to support number
+    await sendWhatsApp(from, 
+      `Namaste! 😊 Aapka message mil gaya.\n\nHumari team jald connect karegi.\n\nAbhi baat karni hai?\n📞 +91 87960 64170\n🔗 www.datunai.com\n\n—\n\nHello! 😊 We received your message.\n\nOur team will connect shortly.\n\nNeed immediate help?\n📞 +91 87960 64170\n🔗 www.datunai.com\n\n— Datun AI`
+    );
+
+    res.sendStatus(200);
+  } catch (err) {
+    logger.error('WhatsApp webhook error: ' + err.message);
+    Sentry.captureException(err);
+    res.sendStatus(200);
+  }
+});
+startServer();
