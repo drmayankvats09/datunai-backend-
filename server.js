@@ -289,6 +289,11 @@ app.get('/', (req, res) => {
   });
 });
 
+// ── SHORT URL REDIRECT FOR PDF ──
+app.get('/report/:id', (req, res) => {
+  res.redirect(`/api/consultations/${req.params.id}/pdf`);
+});
+
 // ── HEALTH CHECK ──
 app.get('/health', async (req, res) => {
   try {
@@ -596,8 +601,9 @@ app.post('/api/save-consultation', async (req, res) => {
     });
 
     // ── WHATSAPP NOTIFICATIONS ──
-    if (phoneNumber && diagnosis) {
-      const patientPhone = phoneNumber.startsWith('91') ? phoneNumber : '91' + phoneNumber.replace(/^0+/, '');
+    logger.info('WhatsApp check — phoneNumber: ' + phoneNumber + ' | diagnosis: ' + (diagnosis || 'NONE'));
+    if (phoneNumber && phoneNumber.length >= 10 && diagnosis) {
+      const patientPhone = phoneNumber.replace(/^0+/, '');
       
      // 1. Patient ko — Consultation Complete (Approved Template)
       await sendWhatsAppTemplate(patientPhone, 'datunai_consultation_complete', [
@@ -607,7 +613,7 @@ app.post('/api/save-consultation', async (req, res) => {
             { type: 'text', text: name || 'there' },
             { type: 'text', text: diagnosis || 'Dental Concern' },
             { type: 'text', text: urgency || 'Routine' },
-            { type: 'text', text: 'https://dentscan-ai-backend-production.up.railway.app/api/consultations/' + newConsultationId + '/pdf' }
+            { type: 'text', text: 'datunai.com/report/' + newConsultationId }
           ]
         }
       ]);
