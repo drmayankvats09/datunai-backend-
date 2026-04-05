@@ -143,6 +143,9 @@ async function initDB() {
       'dental_history', 'provisional_diagnosis', 'investigations', 
       'treatment_plan', 'medications', 'home_remedies', 'dos_and_donts', 'red_flags'
     ];
+
+    // User phone number column
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number VARCHAR(20);`);
     
     // WhatsApp system columns
     await pool.query(`ALTER TABLE consultations ADD COLUMN IF NOT EXISTS phone_number VARCHAR(20);`);
@@ -565,7 +568,23 @@ app.post('/api/save-consultation', async (req, res) => {
       sessionId: sessionId || Date.now().toString()
     });
 
-    const phoneNumber = req.body.phoneNumber || '';
+    let phoneNumber = req.body.phoneNumber || '';
+
+    // Returning user — agar phone nahi aaya toh DB se fetch karo
+    if (!phoneNumber && userId) {
+      try {
+        const phoneResult = await pool.query(
+          `SELECT phone_number FROM consultations WHERE user_id = $1 AND phone_number IS NOT NULL AND phone_number != '' ORDER BY timestamp DESC LIMIT 1`,
+          [userId]
+        );
+        if (phoneResult.rows.length > 0) {
+          phoneNumber = phoneResult.rows[0].phone_number;
+          logger.info('Returning user phone fetched from DB: ' + phoneNumber);
+        }
+      } catch (pErr) {
+        logger.error('Phone fetch error: ' + pErr.message);
+      }
+    }
 
     const newConsultationId = await saveToDatabase({
       name, age, gender, email, chiefComplaint, diagnosis, urgency, fullConversation, 
@@ -912,7 +931,38 @@ app.post('/webhook', async (req, res) => {
         `Noted ✅\n\n— Datun AI System`
       );
     }
-
+      
+      // CONSULTATION CONNECT — Patient clicked "Connect on WhatsApp" from website
+    else if (msgLower.includes('consultation') && msgLower.includes('datun ai')) {
+      // Fetch patient's latest consultation
+      try {
+        const phoneClean = from.replace(/^91/, '');
+        const dbResult = await pool.query(
+          `SELECT id, name, diagnosis, urgency FROM consultations WHERE phone_number LIKE $1 ORDER BY timestamp DESC LIMIT 1`,
+          ['%' + phoneClean]
+        );
+        if (dbResult.rows.length > 0) {
+          const c = dbResult.rows[0];
+          await sendWhatsApp(from,
+            `Thank you for connecting, ${c.name || ''}! 😊\n\nYour dental report is in this chat above ☝️\n\nOur care team will call you within 30 minutes to help book your appointment.\n\n📋 Report: https://dentscan-ai-backend-production.up.railway.app/api/consultations/${c.id}/pdf\n\nEveryone Deserves a Doctor.\n— Datun AI`
+          );
+          // Internal alert
+          await sendWhatsApp('918796064170',
+            `🚨 PATIENT CONNECTED\n\n👤 ${c.name || 'Unknown'}\n📞 ${from}\n🩺 ${c.diagnosis || 'N/A'}\n⚡ ${c.urgency || 'ROUTINE'}\n\nAction: Call patient within 30 minutes.\n\n— Datun AI System`
+          );
+        } else {
+          await sendWhatsApp(from,
+            `Thank you for reaching out! 😊\n\nOur care team will connect with you shortly.\n\n📞 +91 87960 64170\n🔗 datunai.com\n\nEveryone Deserves a Doctor.\n— Datun AI`
+          );
+        }
+      } catch (dbErr) {
+        logger.error('Connect lookup error: ' + dbErr.message);
+        await sendWhatsApp(from,
+          `Thank you for connecting! 😊\n\nOur care team will reach out shortly.\n\n📞 +91 87960 64170\n\n— Datun AI`
+        );
+      }
+    }
+      
     // DEFAULT — Any other message
     else {
       await sendWhatsApp(from,
