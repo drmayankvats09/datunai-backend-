@@ -580,10 +580,18 @@ app.post('/api/save-consultation', async (req, res) => {
     if (phoneNumber && diagnosis) {
       const patientPhone = phoneNumber.startsWith('91') ? phoneNumber : '91' + phoneNumber.replace(/^0+/, '');
       
-      // 1. Patient ko — Consultation Complete
-      await sendWhatsApp(patientPhone,
-        `Namaste ${name || ''} ji! 😊\n\nAapki Datun AI dental consultation complete hui.\n\n🩺 Diagnosis: ${diagnosis}\n⚡ Urgency: ${urgency || 'ROUTINE'}\n\n📋 PDF Report: https://dentscan-ai-backend-production.up.railway.app/api/consultations/${newConsultationId}/pdf\n\nHumari team jald connect karegi.\n📞 +91 87960 64170\n🔗 www.datunai.com\n\n—\n\nHello ${name || ''}! 😊\n\nYour Datun AI consultation is complete.\n\n🩺 Diagnosis: ${diagnosis}\n⚡ Urgency: ${urgency || 'ROUTINE'}\n\n📋 PDF Report: https://dentscan-ai-backend-production.up.railway.app/api/consultations/${newConsultationId}/pdf\n\nOur team will connect shortly.\n📞 +91 87960 64170\n🔗 www.datunai.com\n\n— Datun AI`
-      );
+     // 1. Patient ko — Consultation Complete (Approved Template)
+      await sendWhatsAppTemplate(patientPhone, 'datunai_consultation_complete', [
+        {
+          type: 'body',
+          parameters: [
+            { type: 'text', text: name || 'there' },
+            { type: 'text', text: diagnosis || 'Dental Concern' },
+            { type: 'text', text: urgency || 'Routine' },
+            { type: 'text', text: 'https://dentscan-ai-backend-production.up.railway.app/api/consultations/' + newConsultationId + '/pdf' }
+          ]
+        }
+      ]);
 
       // 2. Internal Alert — Tujhe (8796064170 pe)
       await sendWhatsApp('918796064170',
@@ -618,9 +626,15 @@ cron.schedule('0 10 * * *', async () => {
     );
     for (const row of result.rows) {
       const phone = row.phone_number.startsWith('91') ? row.phone_number : '91' + row.phone_number.replace(/^0+/, '');
-      await sendWhatsApp(phone,
-        `Namaste ${row.name || ''} ji! 😊\n\n3 din pehle aapne Datun AI se dental consult kiya tha.\n\nAb kaisa hai? Dentist ke paas gaye?\n\nDobara consult karein:\n🔗 www.datunai.com\n📞 +91 87960 64170\n\n—\n\nHello ${row.name || ''}! 😊\n\nIt's been 3 days since your dental consultation.\n\nHow are you feeling? Did you visit a dentist?\n\nConsult again:\n🔗 www.datunai.com\n📞 +91 87960 64170\n\n— Datun AI`
-      );
+      await sendWhatsAppTemplate(phone, 'datunai_3day_followup', [
+        {
+          type: 'body',
+          parameters: [
+            { type: 'text', text: row.name || 'there' },
+            { type: 'text', text: row.chief_complaint || 'your dental concern' }
+          ]
+        }
+      ]);
       await pool.query('UPDATE consultations SET follow_up_3day_sent = TRUE WHERE id = $1', [row.id]);
       logger.info('3-day follow-up sent to: ' + row.phone_number);
     }
@@ -642,9 +656,15 @@ cron.schedule('30 10 * * *', async () => {
     );
     for (const row of result.rows) {
       const phone = row.phone_number.startsWith('91') ? row.phone_number : '91' + row.phone_number.replace(/^0+/, '');
-      await sendWhatsApp(phone,
-        `Namaste ${row.name || ''} ji! 🦷\n\nEk hafte pehle aapko "${row.chief_complaint || 'dental'}" ki takleef thi.\n\nDentist se mile? Agar nahi toh hum help kar sakte hain:\n📞 +91 87960 64170\n🔗 www.datunai.com\n\n—\n\nHello ${row.name || ''}! 🦷\n\nA week ago you consulted for "${row.chief_complaint || 'dental issue'}".\n\nHave you seen a dentist? We can help:\n📞 +91 87960 64170\n🔗 www.datunai.com\n\n— Datun AI`
-      );
+      await sendWhatsAppTemplate(phone, 'datunai_7day_followup', [
+        {
+          type: 'body',
+          parameters: [
+            { type: 'text', text: row.name || 'there' },
+            { type: 'text', text: row.chief_complaint || 'your dental concern' }
+          ]
+        }
+      ]);
       await pool.query('UPDATE consultations SET follow_up_7day_sent = TRUE WHERE id = $1', [row.id]);
       logger.info('7-day follow-up sent to: ' + row.phone_number);
     }
