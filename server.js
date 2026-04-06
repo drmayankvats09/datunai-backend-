@@ -606,7 +606,7 @@ app.post('/api/save-consultation', async (req, res) => {
    logger.info('WhatsApp check — phoneNumber: ' + phoneNumber + ' | diagnosis: ' + (diagnosis || 'NONE'));
     
     // Internal Alert — HAMESHA jaayega
-    await sendWhatsAppTemplate('918796064170', 'datunai_internal_alert', [{
+    await sendWhatsAppTemplate('919953135340', 'datunai_internal_alert', [{
       type: 'body', parameters: [
         { type: 'text', text: name || 'Unknown' },
         { type: 'text', text: phoneNumber || 'Not provided' },
