@@ -610,7 +610,6 @@ app.post('/api/save-consultation', async (req, res) => {
         { type: 'text', text: phoneNumber || 'Not provided' },
         { type: 'text', text: diagnosis || 'Pending' },
         { type: 'text', text: urgency || 'ROUTINE' },
-        { type: 'text', text: 'datunai.com/report/' + newConsultationId }
       ]
     }]);
 
@@ -822,7 +821,6 @@ app.post('/webhook', async (req, res) => {
           { type: 'text', text: from },
           { type: 'text', text: 'Book Appointment clicked' },
           { type: 'text', text: 'ACTION NEEDED' },
-          { type: 'text', text: 'Contact patient within 30 minutes' }
         ]
       }]);
     }
@@ -839,7 +837,6 @@ app.post('/webhook', async (req, res) => {
           { type: 'text', text: from },
           { type: 'text', text: 'Still in Pain — 3day followup' },
           { type: 'text', text: 'EMERGENCY' },
-          { type: 'text', text: 'Contact patient IMMEDIATELY' }
         ]
       }]);
     }
@@ -890,7 +887,6 @@ app.post('/webhook', async (req, res) => {
           { type: 'text', text: from },
           { type: 'text', text: 'Talk to Us clicked' },
           { type: 'text', text: 'ROUTINE' },
-          { type: 'text', text: 'Reach out to patient' }
         ]
       }]);
     }
@@ -913,7 +909,6 @@ app.post('/webhook', async (req, res) => {
           { type: 'text', text: from },
           { type: 'text', text: 'Reschedule clicked' },
           { type: 'text', text: 'ROUTINE' },
-          { type: 'text', text: 'Contact patient to reschedule' }
         ]
       }]);
     }
@@ -929,7 +924,6 @@ app.post('/webhook', async (req, res) => {
           { type: 'text', text: from },
           { type: 'text', text: 'Get Directions clicked' },
           { type: 'text', text: 'ROUTINE' },
-          { type: 'text', text: 'Share clinic details with patient' }
         ]
       }]);
     }
@@ -952,7 +946,6 @@ app.post('/webhook', async (req, res) => {
           { type: 'text', text: from },
           { type: 'text', text: 'Ask a Question clicked' },
           { type: 'text', text: 'ROUTINE' },
-          { type: 'text', text: 'Monitor for follow-up message' }
         ]
       }]);
     }
@@ -1003,7 +996,6 @@ app.post('/webhook', async (req, res) => {
               { type: 'text', text: from },
               { type: 'text', text: c.diagnosis || 'N/A' },
               { type: 'text', text: c.urgency || 'ROUTINE' },
-              { type: 'text', text: 'Call patient within 30 minutes' }
             ]
           }]);
         } else {
