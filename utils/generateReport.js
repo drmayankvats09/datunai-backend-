@@ -7,7 +7,7 @@ function generateConsultationPDF(data, stream) {
     bufferPages: true,
     info: {
       Title: 'Datun AI - Dental Report #DTN-' + (data.id || '000'),
-      Author: 'Datun AI by Dr. Mayank Vats',
+      Author: 'Datun AI',
       Subject: 'AI Dental Triage Report',
       Creator: 'datunai.com'
     }
@@ -201,6 +201,28 @@ function generateConsultationPDF(data, stream) {
   doc.y+=34;
 
   // ═══════════════════════════════════════
+  // VISUAL FINDINGS (Photo Analysis)
+  // ═══════════════════════════════════════
+  var visualFindings = cap(data.visual_findings || '');
+  if(visualFindings && visualFindings !== 'Not reported' && visualFindings !== ''){
+    sectionTitle('Visual Findings (Photo Analysis)');
+    var vfItems = toPoints(visualFindings);
+    if(vfItems.length){
+      var vfBoxH = vfItems.length * 18 + 10;
+      checkPage(vfBoxH + 5);
+      var vfY = doc.y;
+      doc.roundedRect(M+4, vfY, CW-8, vfBoxH, 4).fill(purpleBg);
+      vfItems.forEach(function(item, i){
+        doc.font('Helvetica-Bold').fontSize(8).fillColor(purple);
+        doc.text('> ', M+12, vfY+6+(i*18), {continued:true});
+        doc.font('Helvetica').fontSize(8.5).fillColor(dark2);
+        doc.text(item, {width: CW-50});
+      });
+      doc.y = vfY + vfBoxH + 4;
+      doc.moveDown(0.2);
+    }
+  }
+  // ═══════════════════════════════════════
   // INVESTIGATIONS
   // ═══════════════════════════════════════
   if(investigations&&investigations!=='Not Reported'&&investigations!==''){
@@ -339,9 +361,9 @@ function generateConsultationPDF(data, stream) {
   doc.moveDown(0.3);
   var ctaY=doc.y;
   doc.roundedRect(M,ctaY,CW,46,6).fill(tealBg);
-  doc.font('Helvetica-Bold').fontSize(9).fillColor(tealDk).text('Connect with Dr. Mayank Vats',M+12,ctaY+8);
-  doc.font('Helvetica').fontSize(8).fillColor(dark2).text('WhatsApp: +91 99531 35340   |   Email: hello@datunai.com   |   Web: datunai.com',M+12,ctaY+22,{width:CW-24});
-  doc.font('Helvetica-Bold').fontSize(7.5).fillColor(teal).text('Visit a dental clinic for physical examination and definitive treatment.',M+12,ctaY+34,{width:CW-24});
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(tealDk).text('Book Your Appointment — Datun AI',M+12,ctaY+8);
+  doc.font('Helvetica').fontSize(8).fillColor(dark2).text('WhatsApp: +91 70184 64796   |   Email: hello@datunai.com   |   Web: datunai.com',M+12,ctaY+22,{width:CW-24});
+  doc.font('Helvetica-Bold').fontSize(7.5).fillColor(teal).text('Connect with our team for clinical examination and definitive treatment.',M+12,ctaY+34,{width:CW-24});
   doc.y=ctaY+54;
 
   // ═══════════════════════════════════════
