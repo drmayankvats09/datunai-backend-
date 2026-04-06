@@ -604,8 +604,8 @@ app.post('/api/save-consultation', async (req, res) => {
    logger.info('WhatsApp check — phoneNumber: ' + phoneNumber + ' | diagnosis: ' + (diagnosis || 'NONE'));
     
     // Internal Alert — HAMESHA jaayega
-    await sendWhatsApp('918796064170',
-      `🚨 NEW PATIENT ALERT\n\n👤 Name: ${name || 'Unknown'}\n📞 Phone: ${phoneNumber || 'Not provided'}\n📧 Email: ${email || 'N/A'}\n🩺 Diagnosis: ${diagnosis || 'Pending'}\n⚡ Urgency: ${urgency || 'ROUTINE'}\n🎂 Age: ${age || 'N/A'}\n⚧ Gender: ${gender || 'N/A'}\n\n📋 PDF: https://dentscan-ai-backend-production.up.railway.app/api/consultations/${newConsultationId}/pdf\n\n— Datun AI System`
+    await sendWhatsApp('919953135340',
+      `🚨 NEW PATIENT ALERT\n\n👤 Name: ${name || 'Unknown'}\n📞 Phone: ${phoneNumber || 'Not provided'}\n📧 Email: ${email || 'N/A'}\n🩺 Diagnosis: ${diagnosis || 'Pending'}\n⚡ Urgency: ${urgency || 'ROUTINE'}\n🎂 Age: ${age || 'N/A'}\n⚧ Gender: ${gender || 'N/A'}\n\n📋 datunai.com/report/${newConsultationId}\n\n— Datun AI System`
     );
 
     // Patient ko template — sirf tab jab valid phone ho
@@ -845,7 +845,7 @@ app.post('/webhook', async (req, res) => {
         if (dbResult.rows.length > 0) {
           const cId = dbResult.rows[0].id;
           await sendWhatsApp(from,
-            `Here's your latest dental report:\n\n📋 https://dentscan-ai-backend-production.up.railway.app/api/consultations/${cId}/pdf\n\nTap the link to view and download.\n\n— Datun AI`
+          `Here's your latest dental report:\n\n📋 datunai.com/report/${cId}\n\nTap the link to view and download.\n\n— Datun AI`
           );
         } else {
           await sendWhatsApp(from,
@@ -949,7 +949,7 @@ app.post('/webhook', async (req, res) => {
         if (dbResult.rows.length > 0) {
           const c = dbResult.rows[0];
           await sendWhatsApp(from,
-            `Thank you for connecting, ${c.name || ''}! 😊\n\nYour dental report is in this chat above ☝️\n\nOur care team will call you within 30 minutes to help book your appointment.\n\n📋 Report: https://dentscan-ai-backend-production.up.railway.app/api/consultations/${c.id}/pdf\n\nEveryone Deserves a Doctor.\n— Datun AI`
+            `Thank you for connecting, ${c.name || ''}! 😊\n\nYour dental report is in this chat above ☝️\n\nOur care team will call you within 30 minutes to help book your appointment.\n\n📋 datunai.com/report/${c.id}\n\nEveryone Deserves a Doctor.\n— Datun AI`
           );
           // Internal alert
           await sendWhatsApp('918796064170',
