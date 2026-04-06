@@ -551,7 +551,7 @@ app.post('/api/save-consultation', async (req, res) => {
       name, age, gender, email, messages, sessionId, userId,
       location, pain_scale, medical_history, allergies, dental_history, 
       provisional_diagnosis, investigations, treatment_plan, medications, 
-      home_remedies, dos_and_donts, red_flags
+      home_remedies, dos_and_donts, red_flags, visual_findings
     } = req.body;
 
     const { diagnosis, urgency, chiefComplaint } = extractAssessment(messages || []);
@@ -599,7 +599,7 @@ app.post('/api/save-consultation', async (req, res) => {
       userId: userId || null,
       location, pain_scale, medical_history, allergies, dental_history, 
       provisional_diagnosis, investigations, treatment_plan, medications, 
-      home_remedies, dos_and_donts, red_flags, phoneNumber
+      home_remedies, dos_and_donts, red_flags, visual_findings, phoneNumber
     });
 
     // ── WHATSAPP NOTIFICATIONS ──
