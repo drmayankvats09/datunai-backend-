@@ -141,7 +141,8 @@ async function initDB() {
     const newColumns = [
       'location', 'pain_scale', 'medical_history', 'allergies', 
       'dental_history', 'provisional_diagnosis', 'investigations', 
-      'treatment_plan', 'medications', 'home_remedies', 'dos_and_donts', 'red_flags'
+      'treatment_plan', 'medications', 'home_remedies', 'dos_and_donts', 'red_flags',
+      'visual_findings'
     ];
 
     // User phone number column
@@ -216,8 +217,8 @@ async function saveToDatabase(data) {
       `INSERT INTO consultations 
         (name, age, gender, email, chief_complaint, diagnosis, urgency, full_conversation, session_id, user_id, 
          location, pain_scale, medical_history, allergies, dental_history, provisional_diagnosis, 
-         investigations, treatment_plan, medications, home_remedies, dos_and_donts, red_flags, phone_number)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23) RETURNING id`,
+         investigations, treatment_plan, medications, home_remedies, dos_and_donts, red_flags, visual_findings, phone_number)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24) RETURNING id`,
       [
         data.name || '',
         data.age || '',
@@ -241,6 +242,7 @@ async function saveToDatabase(data) {
         data.home_remedies || 'Not reported',
         data.dos_and_donts || 'Not reported',
         data.red_flags || 'None',
+        data.visual_findings || '',
         data.phoneNumber || ''
       ]
     );
