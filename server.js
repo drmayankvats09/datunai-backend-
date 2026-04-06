@@ -601,11 +601,16 @@ app.post('/api/save-consultation', async (req, res) => {
     });
 
     // ── WHATSAPP NOTIFICATIONS ──
-    logger.info('WhatsApp check — phoneNumber: ' + phoneNumber + ' | diagnosis: ' + (diagnosis || 'NONE'));
+   logger.info('WhatsApp check — phoneNumber: ' + phoneNumber + ' | diagnosis: ' + (diagnosis || 'NONE'));
+    
+    // Internal Alert — HAMESHA jaayega
+    await sendWhatsApp('918796064170',
+      `🚨 NEW PATIENT ALERT\n\n👤 Name: ${name || 'Unknown'}\n📞 Phone: ${phoneNumber || 'Not provided'}\n📧 Email: ${email || 'N/A'}\n🩺 Diagnosis: ${diagnosis || 'Pending'}\n⚡ Urgency: ${urgency || 'ROUTINE'}\n🎂 Age: ${age || 'N/A'}\n⚧ Gender: ${gender || 'N/A'}\n\n📋 PDF: https://dentscan-ai-backend-production.up.railway.app/api/consultations/${newConsultationId}/pdf\n\n— Datun AI System`
+    );
+
+    // Patient ko template — sirf tab jab valid phone ho
     if (phoneNumber && phoneNumber.length >= 10 && diagnosis) {
       const patientPhone = phoneNumber.replace(/^0+/, '');
-      
-     // 1. Patient ko — Consultation Complete (Approved Template)
       await sendWhatsAppTemplate(patientPhone, 'datunai_consultation_complete', [
         {
           type: 'body',
@@ -617,13 +622,7 @@ app.post('/api/save-consultation', async (req, res) => {
           ]
         }
       ]);
-
-      // 2. Internal Alert — Tujhe (8796064170 pe)
-      await sendWhatsApp('918796064170',
-        `🚨 NEW PATIENT ALERT\n\n👤 Name: ${name || 'Unknown'}\n📞 Phone: ${phoneNumber}\n📧 Email: ${email || 'N/A'}\n🩺 Diagnosis: ${diagnosis}\n⚡ Urgency: ${urgency || 'ROUTINE'}\n🎂 Age: ${age || 'N/A'}\n⚧ Gender: ${gender || 'N/A'}\n\n📋 PDF: https://dentscan-ai-backend-production.up.railway.app/api/consultations/${newConsultationId}/pdf\n\n— Datun AI System`
-      );
-
-      logger.info('WhatsApp notifications sent for consultation: ' + newConsultationId);
+      logger.info('WhatsApp template sent for consultation: ' + newConsultationId);
     }
     
     res.json({ success: true, consultationId: newConsultationId });
