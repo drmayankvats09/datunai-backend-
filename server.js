@@ -921,8 +921,17 @@ app.post('/webhook', async (req, res) => {
     // GET DIRECTIONS
     else if (msgLower === 'get directions') {
       await sendWhatsApp(from,
-        `Please share your location or the clinic name, and we'll help you with directions.\n\nOr call us:\n📞 +91 87960 64170\n\n— Datun AI`
+        `Our care team will share the clinic details and directions with you shortly.\n\nOr call us directly:\n📞 +91 87960 64170\n\nEveryone Deserves a Doctor.\n— Datun AI`
       );
+      await sendWhatsAppTemplate('918796064170', 'datunai_internal_alert', [{
+        type: 'body', parameters: [
+          { type: 'text', text: 'Directions Request' },
+          { type: 'text', text: from },
+          { type: 'text', text: 'Get Directions clicked' },
+          { type: 'text', text: 'ROUTINE' },
+          { type: 'text', text: 'Share clinic details with patient' }
+        ]
+      }]);
     }
 
     // HELPFUL (Weekly Tip)
