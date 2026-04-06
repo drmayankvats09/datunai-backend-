@@ -473,7 +473,7 @@ app.get('/api/consultations/:id/pdf', async (req, res) => {
     const consultation = result.rows[0];
     
     // Translate non-English fields to English for PDF
-    const fieldsToTranslate = ['chief_complaint','diagnosis','provisional_diagnosis','medications','home_remedies','dos_and_donts','treatment_plan','investigations','medical_history','allergies','dental_history','red_flags','location','pain_scale'];
+    const fieldsToTranslate = ['chief_complaint','diagnosis','provisional_diagnosis','medications','home_remedies','dos_and_donts','treatment_plan','investigations','medical_history','allergies','dental_history','red_flags','location','pain_scale','visual_findings'];
     const hasNonEnglish = fieldsToTranslate.some(f => consultation[f] && /[^\x00-\x7F]/.test(consultation[f]));
     
     if(hasNonEnglish && process.env.ANTHROPIC_API_KEY){
