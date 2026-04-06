@@ -817,14 +817,9 @@ app.post('/webhook', async (req, res) => {
         `Thank you! 😊\n\nYour appointment request has been received.\n\nOur care team will contact you within 30 minutes to confirm your appointment with the right dentist near you.\n\nNeed urgent help?\n📞 +91 87960 64170\n\nEveryone Deserves a Doctor.\n— Datun AI`
       );
       // Internal alert
-      await sendWhatsAppTemplate('918796064170', 'datunai_internal_alert', [{
-        type: 'body', parameters: [
-          { type: 'text', text: 'Appointment Request' },
-          { type: 'text', text: from },
-          { type: 'text', text: 'Book Appointment clicked' },
-          { type: 'text', text: 'ACTION NEEDED' },
-        ]
-      }]);
+      await sendWhatsApp('919953135340',
+        `📅 APPOINTMENT REQUEST\n\n📞 Patient: ${from}\n🕐 Requested just now\n\nAction: Contact patient within 30 minutes.\n\n— Datun AI System`
+      );
     }
 
     // STILL IN PAIN
@@ -833,14 +828,9 @@ app.post('/webhook', async (req, res) => {
         `We're sorry to hear that. Your health is our priority.\n\nWe strongly recommend visiting a dentist at the earliest. Our care team will reach out to you shortly to help book an appointment.\n\nNeed immediate help?\n📞 +91 87960 64170\n\nEveryone Deserves a Doctor.\n— Datun AI`
       );
       // URGENT internal alert
-      await sendWhatsAppTemplate('918796064170', 'datunai_internal_alert', [{
-        type: 'body', parameters: [
-          { type: 'text', text: '🚨 URGENT' },
-          { type: 'text', text: from },
-          { type: 'text', text: 'Still in Pain — 3day followup' },
-          { type: 'text', text: 'EMERGENCY' },
-        ]
-      }]);
+      await sendWhatsApp('919953135340',
+        `🚨 URGENT — PATIENT STILL IN PAIN\n\n📞 Patient: ${from}\n⏰ 3-day follow-up response\n⚡ Status: Still in pain\n\nAction Required: Contact patient IMMEDIATELY.\n\n— Datun AI System`
+      );
     }
 
     // FEELING BETTER
@@ -883,14 +873,9 @@ app.post('/webhook', async (req, res) => {
         `Our care team is here for you.\n\nYou can reach us directly:\n📞 Call/WhatsApp: +91 87960 64170\n\nOr reply here — we're listening.\n\nEveryone Deserves a Doctor.\n— Datun AI`
       );
       // Alert
-      await sendWhatsAppTemplate('918796064170', 'datunai_internal_alert', [{
-        type: 'body', parameters: [
-          { type: 'text', text: 'Patient Wants to Talk' },
-          { type: 'text', text: from },
-          { type: 'text', text: 'Talk to Us clicked' },
-          { type: 'text', text: 'ROUTINE' },
-        ]
-      }]);
+      await sendWhatsApp('919953135340',
+        `💬 PATIENT WANTS TO TALK\n\n📞 Patient: ${from}\n\nAction: Reach out to patient.\n\n— Datun AI System`
+      );
     }
 
     // CONFIRM (Appointment)
@@ -905,14 +890,9 @@ app.post('/webhook', async (req, res) => {
       await sendWhatsApp(from,
         `No problem at all.\n\nOur care team will contact you shortly to find a better time.\n\n📞 +91 87960 64170\n\n— Datun AI`
       );
-      await sendWhatsAppTemplate('918796064170', 'datunai_internal_alert', [{
-        type: 'body', parameters: [
-          { type: 'text', text: 'Reschedule Request' },
-          { type: 'text', text: from },
-          { type: 'text', text: 'Reschedule clicked' },
-          { type: 'text', text: 'ROUTINE' },
-        ]
-      }]);
+      await sendWhatsApp('919953135340',
+        `🔄 RESCHEDULE REQUEST\n\n📞 Patient: ${from}\n\nAction: Contact patient to reschedule appointment.\n\n— Datun AI System`
+      );
     }
 
     // GET DIRECTIONS
@@ -920,14 +900,9 @@ app.post('/webhook', async (req, res) => {
       await sendWhatsApp(from,
         `Our care team will share the clinic details and directions with you shortly.\n\nOr call us directly:\n📞 +91 87960 64170\n\nEveryone Deserves a Doctor.\n— Datun AI`
       );
-      await sendWhatsAppTemplate('918796064170', 'datunai_internal_alert', [{
-        type: 'body', parameters: [
-          { type: 'text', text: 'Directions Request' },
-          { type: 'text', text: from },
-          { type: 'text', text: 'Get Directions clicked' },
-          { type: 'text', text: 'ROUTINE' },
-        ]
-      }]);
+      await sendWhatsApp('919953135340',
+        `📍 DIRECTIONS REQUEST\n\n📞 Patient: ${from}\n\nAction: Share clinic details with patient.\n\n— Datun AI System`
+      );
     }
 
     // HELPFUL (Weekly Tip)
@@ -942,14 +917,9 @@ app.post('/webhook', async (req, res) => {
       await sendWhatsApp(from,
         `Of course! Type your dental question below and our care team will get back to you.\n\nOr start a detailed AI consultation:\n🔗 www.datunai.com\n\n— Datun AI`
       );
-      await sendWhatsAppTemplate('918796064170', 'datunai_internal_alert', [{
-        type: 'body', parameters: [
-          { type: 'text', text: 'Patient Question' },
-          { type: 'text', text: from },
-          { type: 'text', text: 'Ask a Question clicked' },
-          { type: 'text', text: 'ROUTINE' },
-        ]
-      }]);
+      await sendWhatsApp('919953135340',
+        `❓ PATIENT QUESTION INCOMING\n\n📞 Patient: ${from}\n\nAction: Monitor for follow-up message.\n\n— Datun AI System`
+      );
     }
 
     // UNSUBSCRIBE
@@ -992,14 +962,9 @@ app.post('/webhook', async (req, res) => {
             `Thank you for connecting, ${c.name || ''}! 😊\n\nYour dental report is in this chat above ☝️\n\nOur care team will call you within 30 minutes to help book your appointment.\n\n📋 datunai.com/report/${c.id}\n\nEveryone Deserves a Doctor.\n— Datun AI`
           );
           // Internal alert
-          await sendWhatsAppTemplate('918796064170', 'datunai_internal_alert', [{
-            type: 'body', parameters: [
-              { type: 'text', text: c.name || 'Unknown' },
-              { type: 'text', text: from },
-              { type: 'text', text: c.diagnosis || 'N/A' },
-              { type: 'text', text: c.urgency || 'ROUTINE' },
-            ]
-          }]);
+          await sendWhatsApp('919953135340',
+            `🚨 PATIENT CONNECTED\n\n👤 ${c.name || 'Unknown'}\n📞 ${from}\n🩺 ${c.diagnosis || 'N/A'}\n⚡ ${c.urgency || 'ROUTINE'}\n\nAction: Call patient within 30 minutes.\n\n— Datun AI System`
+          );
         } else {
           await sendWhatsApp(from,
             `Thank you for reaching out! 😊\n\nOur care team will connect with you shortly.\n\n📞 +91 87960 64170\n🔗 datunai.com\n\nEveryone Deserves a Doctor.\n— Datun AI`
