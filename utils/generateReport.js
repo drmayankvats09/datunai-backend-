@@ -205,20 +205,51 @@ function generateConsultationPDF(data, stream) {
   // ═══════════════════════════════════════
   var visualFindings = cap(data.visual_findings || '');
   if(visualFindings && visualFindings !== 'Not reported' && visualFindings !== ''){
-    sectionTitle('Visual Findings (Photo Analysis)');
-    var vfItems = toPoints(visualFindings);
-    if(vfItems.length){
-      var vfBoxH = vfItems.length * 18 + 10;
-      checkPage(vfBoxH + 5);
-      var vfY = doc.y;
-      doc.roundedRect(M+4, vfY, CW-8, vfBoxH, 4).fill(purpleBg);
-      vfItems.forEach(function(item, i){
-        doc.font('Helvetica-Bold').fontSize(8).fillColor(purple);
-        doc.text('> ', M+12, vfY+6+(i*18), {continued:true});
-        doc.font('Helvetica').fontSize(8.5).fillColor(dark2);
-        doc.text(item, {width: CW-50});
+    sectionTitle('Visual Findings — Photo Analysis');
+    var vfLines = visualFindings.split('\n').map(function(l){return l.trim();}).filter(Boolean);
+    if(vfLines.length){
+      var tableY = doc.y;
+      var col1 = 25, col2 = 170, col3 = 110, col4 = CW - col1 - col2 - col3;
+      var rowH = 18, headerH = 20;
+      checkPage(headerH + vfLines.length * rowH + 10);
+      tableY = doc.y;
+
+      // Header
+      doc.roundedRect(M+4, tableY, CW-8, headerH, 3).fill(purple);
+      doc.font('Helvetica-Bold').fontSize(7.5).fillColor(white);
+      doc.text('#', M+10, tableY+6, {width:col1});
+      doc.text('Finding', M+10+col1, tableY+6, {width:col2});
+      doc.text('Location', M+10+col1+col2, tableY+6, {width:col3});
+      doc.text('Severity', M+10+col1+col2+col3, tableY+6, {width:col4});
+
+      // Rows
+      vfLines.forEach(function(line, i){
+        var rowY = tableY + headerH + (i * rowH);
+        doc.rect(M+4, rowY, CW-8, rowH).fill(i%2===0 ? purpleBg : white);
+        var parts = line.split('|').map(function(p){return p.trim();});
+        var finding = parts[0] || line;
+        var location = parts[1] || '—';
+        var severity = parts[2] || '—';
+        var sevColor = purple;
+        var sev = severity.toLowerCase();
+        if(sev.includes('severe')) sevColor = red;
+        else if(sev.includes('moderate')) sevColor = orange;
+        else if(sev.includes('mild')) sevColor = yellow;
+        else if(sev.includes('noted')) sevColor = green;
+
+        doc.font('Helvetica-Bold').fontSize(7.5).fillColor(purple);
+        doc.text(String(i+1), M+10, rowY+5, {width:col1});
+        doc.font('Helvetica').fontSize(8).fillColor(dark2);
+        doc.text(finding, M+10+col1, rowY+5, {width:col2});
+        doc.font('Helvetica').fontSize(8).fillColor(dark2);
+        doc.text(location, M+10+col1+col2, rowY+5, {width:col3});
+        doc.font('Helvetica-Bold').fontSize(8).fillColor(sevColor);
+        doc.text(severity.toUpperCase(), M+10+col1+col2+col3, rowY+5, {width:col4});
       });
-      doc.y = vfY + vfBoxH + 4;
+
+      doc.rect(M+4, tableY, CW-8, headerH + vfLines.length * rowH)
+        .lineWidth(0.5).strokeColor(grayBdr).stroke();
+      doc.y = tableY + headerH + vfLines.length * rowH + 8;
       doc.moveDown(0.2);
     }
   }
