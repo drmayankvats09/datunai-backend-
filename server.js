@@ -152,6 +152,32 @@ async function initDB() {
     await pool.query(`ALTER TABLE consultations ADD COLUMN IF NOT EXISTS phone_number VARCHAR(20);`);
     await pool.query(`ALTER TABLE consultations ADD COLUMN IF NOT EXISTS follow_up_3day_sent BOOLEAN DEFAULT FALSE;`);
     await pool.query(`ALTER TABLE consultations ADD COLUMN IF NOT EXISTS follow_up_7day_sent BOOLEAN DEFAULT FALSE;`);
+    // ─────────────────────────────────────────────
+    // V2 REFACTOR — User profile + Incremental save
+    // ─────────────────────────────────────────────
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(255);`);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_age VARCHAR(10);`);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_gender VARCHAR(20);`);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_city VARCHAR(100);`);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_completed BOOLEAN DEFAULT FALSE;`);
+    
+    await pool.query(`ALTER TABLE consultations ADD COLUMN IF NOT EXISTS messages_json JSONB DEFAULT '[]'::jsonb;`);
+    await pool.query(`ALTER TABLE consultations ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'completed';`);
+    await pool.query(`ALTER TABLE consultations ADD COLUMN IF NOT EXISTS client_uuid VARCHAR(64);`);
+    await pool.query(`ALTER TABLE consultations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
+    
+    // Unique constraint on client_uuid (idempotency)
+    try {
+      await pool.query(`ALTER TABLE consultations ADD CONSTRAINT consultations_client_uuid_unique UNIQUE (client_uuid);`);
+    } catch(e) { /* already exists, ignore */ }
+    
+    // Index for fast drawer queries
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_consult_user_status ON consultations(user_id, status, updated_at DESC);`);
+    
+    // Migrate purani consultations: jo abhi hain woh sab 'completed' maan li jaayengi
+    await pool.query(`UPDATE consultations SET status = 'completed' WHERE status IS NULL;`);
+    
+    logger.info('✅ V2 schema migration complete');
 
     logger.info('🔨 Checking for missing columns...');
     for (const col of newColumns) {
@@ -426,11 +452,39 @@ app.post('/api/auth/user', async (req, res) => {
             picture = EXCLUDED.picture,
             preferred_language = COALESCE(EXCLUDED.preferred_language, users.preferred_language),
             last_active = NOW()
-      RETURNING id, preferred_language
+      RETURNING id, preferred_language, full_name, profile_age, profile_gender, profile_city, profile_completed, phone_number
     `, [auth0Id, name || '', email || '', picture || '', req.body.preferred_language || 'en']);
     const user = result.rows[0];
+    
+    // V2: Check for in-progress consultation (last 24h)
+    let resumeConsultation = null;
+    try {
+      const resumeQ = await pool.query(`
+        SELECT id, updated_at, jsonb_array_length(COALESCE(messages_json, '[]'::jsonb)) AS msg_count
+        FROM consultations
+        WHERE user_id = $1 AND status = 'in_progress'
+          AND updated_at > NOW() - INTERVAL '24 hours'
+        ORDER BY updated_at DESC LIMIT 1
+      `, [user.id]);
+      if (resumeQ.rows.length > 0) {
+        resumeConsultation = resumeQ.rows[0];
+      }
+    } catch(e) { logger.warn('Resume check failed: ' + e.message); }
+    
     logger.info('User saved: ' + email);
-    res.json({ success: true, name, email, picture, userId: user.id, preferred_language: user.preferred_language });
+    res.json({
+      success: true,
+      name, email, picture,
+      userId: user.id,
+      preferred_language: user.preferred_language,
+      full_name: user.full_name,
+      age: user.profile_age,
+      gender: user.profile_gender,
+      city: user.profile_city,
+      phone_number: user.phone_number,
+      profile_completed: user.profile_completed || false,
+      resume_consultation: resumeConsultation
+    });
   } catch (err) {
     Sentry.captureException(err);
     logger.error('Auth user error: ' + err.message);
@@ -452,7 +506,15 @@ app.get('/api/user/consultations', async (req, res) => {
     if (!userResult.rows.length) return res.json({ consultations: [] });
     const userId = userResult.rows[0].id;
     const result = await pool.query(
-      'SELECT id, timestamp, chief_complaint, diagnosis, urgency, age, gender FROM consultations WHERE user_id = $1 ORDER BY timestamp DESC LIMIT 20',
+      `SELECT id, timestamp, updated_at, chief_complaint, diagnosis, urgency, age, gender, status,
+              COALESCE(jsonb_array_length(messages_json), 0) AS msg_count
+       FROM consultations 
+       WHERE user_id = $1 
+       ORDER BY 
+         CASE WHEN status = 'in_progress' THEN 0 ELSE 1 END,
+         updated_at DESC NULLS LAST,
+         timestamp DESC
+       LIMIT 30`,
       [userId]
     );
     res.json({ consultations: result.rows });
@@ -540,6 +602,143 @@ app.get('/api/user/consultation/:id', async (req, res) => {
     Sentry.captureException(err);
     logger.error('Consultation fetch error: ' + err.message);
     res.status(500).json({ error: 'Failed to fetch consultation' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════
+// V2: USER PROFILE + INCREMENTAL CONSULTATION ENDPOINTS
+// ═══════════════════════════════════════════════════════════
+
+// Helper: token se user nikalo
+async function getUserFromToken(authHeader) {
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
+  try {
+    const token = authHeader.split(' ')[1];
+    const userInfo = await axios.get('https://' + auth0Domain + '/userinfo', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    const r = await pool.query('SELECT * FROM users WHERE auth0_id = $1', [userInfo.data.sub]);
+    return r.rows[0] || null;
+  } catch (e) { return null; }
+}
+
+// ─── PROFILE UPDATE (intake form submit) ───
+app.patch('/api/profile', async (req, res) => {
+  try {
+    const user = await getUserFromToken(req.headers.authorization);
+    if (!user) return res.status(401).json({ error: 'Auth required' });
+    
+    const { full_name, age, gender, city, phone_number, preferred_language } = req.body;
+    
+    const result = await pool.query(`
+      UPDATE users
+      SET full_name = COALESCE($1, full_name),
+          profile_age = COALESCE($2, profile_age),
+          profile_gender = COALESCE($3, profile_gender),
+          profile_city = COALESCE($4, profile_city),
+          phone_number = COALESCE($5, phone_number),
+          preferred_language = COALESCE($6, preferred_language),
+          profile_completed = TRUE,
+          last_active = NOW()
+      WHERE id = $7
+      RETURNING *
+    `, [full_name, age, gender, city, phone_number, preferred_language, user.id]);
+    
+    res.json({ success: true, user: result.rows[0] });
+  } catch (err) {
+    logger.error('Profile update error: ' + err.message);
+    res.status(500).json({ error: 'Profile update failed' });
+  }
+});
+
+// ─── CONSULTATION START (pehla message bhejne pe) ───
+app.post('/api/consultations/start', async (req, res) => {
+  try {
+    const user = await getUserFromToken(req.headers.authorization);
+    if (!user) return res.status(401).json({ error: 'Auth required' });
+    
+    const { client_uuid } = req.body;
+    if (!client_uuid) return res.status(400).json({ error: 'client_uuid required' });
+    
+    // Idempotent — agar pehle se exists, wahi return karo
+    const existing = await pool.query(
+      'SELECT id, status FROM consultations WHERE client_uuid = $1 AND user_id = $2',
+      [client_uuid, user.id]
+    );
+    if (existing.rows.length > 0) {
+      return res.json({ success: true, consultationId: existing.rows[0].id, existing: true });
+    }
+    
+    const result = await pool.query(`
+      INSERT INTO consultations 
+        (user_id, client_uuid, status, messages_json, name, age, gender, email, phone_number, timestamp, updated_at)
+      VALUES ($1, $2, 'in_progress', '[]'::jsonb, $3, $4, $5, $6, $7, NOW(), NOW())
+      RETURNING id
+    `, [
+      user.id, client_uuid,
+      user.full_name || user.name || '',
+      user.profile_age || '',
+      user.profile_gender || '',
+      user.email || '',
+      user.phone_number || ''
+    ]);
+    
+    res.json({ success: true, consultationId: result.rows[0].id });
+  } catch (err) {
+    logger.error('Consultation start error: ' + err.message);
+    res.status(500).json({ error: 'Start failed', detail: err.message });
+  }
+});
+
+// ─── MESSAGE APPEND (har message ke baad) ───
+app.patch('/api/consultations/:id/message', async (req, res) => {
+  try {
+    const user = await getUserFromToken(req.headers.authorization);
+    if (!user) return res.status(401).json({ error: 'Auth required' });
+    
+    const { id } = req.params;
+    const { role, content } = req.body;
+    if (!role || content === undefined) return res.status(400).json({ error: 'role and content required' });
+    
+    const newMsg = { role, content, timestamp: new Date().toISOString() };
+    
+    const result = await pool.query(`
+      UPDATE consultations
+      SET messages_json = COALESCE(messages_json, '[]'::jsonb) || $1::jsonb,
+          updated_at = NOW()
+      WHERE id = $2 AND user_id = $3 AND status = 'in_progress'
+      RETURNING id
+    `, [JSON.stringify([newMsg]), id, user.id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Consultation not found or completed' });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    logger.error('Message append error: ' + err.message);
+    res.status(500).json({ error: 'Append failed' });
+  }
+});
+
+// ─── CONSULTATION COMPLETE (RX_END pe) ───
+app.post('/api/consultations/:id/complete', async (req, res) => {
+  try {
+    const user = await getUserFromToken(req.headers.authorization);
+    if (!user) return res.status(401).json({ error: 'Auth required' });
+    
+    const { id } = req.params;
+    const result = await pool.query(`
+      UPDATE consultations
+      SET status = 'completed', updated_at = NOW()
+      WHERE id = $1 AND user_id = $2
+      RETURNING id
+    `, [id, user.id]);
+    
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    res.json({ success: true });
+  } catch (err) {
+    logger.error('Complete error: ' + err.message);
+    res.status(500).json({ error: 'Complete failed' });
   }
 });
 
