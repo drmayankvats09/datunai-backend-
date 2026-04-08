@@ -755,12 +755,12 @@ app.post('/api/consultations/:id/complete', requireAuthAndUser, async (req, res)
   }
 });
 
-// ── SAVE CONSULTATION ──
+// ── SAVE CONSULTATION (V2 — now UPDATEs existing in_progress row) ──
 app.post('/api/save-consultation', async (req, res) => {
   try {
-    // 🔥 Naya data (location, pain_scale etc) bhi extract kar rahe hain
     const { 
-      name, age, gender, email, messages, sessionId, userId,
+      name, age, gender, email, messages, sessionId, userId, phoneNumber,
+      activeConsultId, // ← NEW: frontend will send this
       location, pain_scale, medical_history, allergies, dental_history, 
       provisional_diagnosis, investigations, treatment_plan, medications, 
       home_remedies, dos_and_donts, red_flags, visual_findings
@@ -774,77 +774,126 @@ app.post('/api/save-consultation', async (req, res) => {
       .join('\n---\n')
       .slice(0, 50000);
 
+    // Save to Google Sheets (same as before)
     await saveToSheets({
       timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
-      name,
-      age,
-      gender,
-      email,
-      chiefComplaint,
-      diagnosis,
-      urgency,
-      fullConversation,
-      sessionId: sessionId || Date.now().toString()
+      name, age, gender, email, chiefComplaint, diagnosis, urgency,
+      fullConversation, sessionId: sessionId || Date.now().toString()
     });
 
-    let phoneNumber = req.body.phoneNumber || '';
-
-    // Returning user — agar phone nahi aaya toh DB se fetch karo
-    if (!phoneNumber && userId) {
+    // Returning user — phone from DB if not provided
+    let finalPhone = phoneNumber || '';
+    if (!finalPhone && userId) {
       try {
         const phoneResult = await pool.query(
-          `SELECT phone_number FROM consultations WHERE user_id = $1 AND phone_number IS NOT NULL AND phone_number != '' ORDER BY timestamp DESC LIMIT 1`,
+          `SELECT phone_number FROM users WHERE id = $1`,
           [userId]
         );
-        if (phoneResult.rows.length > 0) {
-          phoneNumber = phoneResult.rows[0].phone_number;
-          logger.info('Returning user phone fetched from DB: ' + phoneNumber);
+        if (phoneResult.rows.length > 0 && phoneResult.rows[0].phone_number) {
+          finalPhone = phoneResult.rows[0].phone_number;
         }
       } catch (pErr) {
         logger.error('Phone fetch error: ' + pErr.message);
       }
     }
 
-    const newConsultationId = await saveToDatabase({
-      name, age, gender, email, chiefComplaint, diagnosis, urgency, fullConversation, 
-      sessionId: sessionId || Date.now().toString(),
-      userId: userId || null,
-      location, pain_scale, medical_history, allergies, dental_history, 
-      provisional_diagnosis, investigations, treatment_plan, medications, 
-      home_remedies, dos_and_donts, red_flags, visual_findings, phoneNumber
-    });
+    let finalConsultationId;
 
-    // ── WHATSAPP NOTIFICATIONS ──
-   logger.info('WhatsApp check — phoneNumber: ' + phoneNumber + ' | diagnosis: ' + (diagnosis || 'NONE'));
+    // ═════════════════════════════════════════════
+    // CRITICAL FIX: UPDATE existing row instead of INSERT
+    // ═════════════════════════════════════════════
+    if (activeConsultId) {
+      // Update the existing V2 consultation row
+      const updateResult = await pool.query(
+        `UPDATE consultations SET
+          chief_complaint = $1,
+          diagnosis = $2,
+          urgency = $3,
+          full_conversation = $4,
+          location = $5,
+          pain_scale = $6,
+          medical_history = $7,
+          allergies = $8,
+          dental_history = $9,
+          provisional_diagnosis = $10,
+          investigations = $11,
+          treatment_plan = $12,
+          medications = $13,
+          home_remedies = $14,
+          dos_and_donts = $15,
+          red_flags = $16,
+          visual_findings = $17,
+          phone_number = COALESCE(NULLIF($18, ''), phone_number),
+          status = 'completed',
+          updated_at = NOW()
+        WHERE id = $19
+        RETURNING id`,
+        [
+          chiefComplaint, diagnosis, urgency, fullConversation,
+          location || 'Not reported', pain_scale || 'Not reported',
+          medical_history || 'Not reported', allergies || 'Not reported',
+          dental_history || 'Not reported', provisional_diagnosis || diagnosis || 'Pending',
+          investigations || 'Not reported', treatment_plan || 'Not reported',
+          medications || 'Not reported', home_remedies || 'Not reported',
+          dos_and_donts || 'Not reported', red_flags || 'None',
+          visual_findings || '', finalPhone, activeConsultId
+        ]
+      );
+
+      if (updateResult.rows.length > 0) {
+        finalConsultationId = updateResult.rows[0].id;
+        logger.info('Consultation UPDATED (V2): ' + finalConsultationId);
+      } else {
+        logger.warn('activeConsultId not found, falling back to INSERT');
+      }
+    }
+
+    // Fallback: if no activeConsultId or update failed → INSERT (backward compat)
+    if (!finalConsultationId) {
+      finalConsultationId = await saveToDatabase({
+        name, age, gender, email, chiefComplaint, diagnosis, urgency, 
+        fullConversation, sessionId: sessionId || Date.now().toString(),
+        userId: userId || null,
+        location, pain_scale, medical_history, allergies, dental_history, 
+        provisional_diagnosis, investigations, treatment_plan, medications, 
+        home_remedies, dos_and_donts, red_flags, visual_findings, 
+        phoneNumber: finalPhone
+      });
+      // Mark as completed immediately
+      await pool.query(`UPDATE consultations SET status = 'completed' WHERE id = $1`, [finalConsultationId]);
+    }
+
+    // ── WHATSAPP NOTIFICATIONS (FIX: Internal alert as PLAIN TEXT) ──
+    logger.info('WhatsApp check — phoneNumber: ' + finalPhone + ' | diagnosis: ' + (diagnosis || 'NONE'));
     
-    // Internal Alert — HAMESHA jaayega
-    await sendWhatsAppTemplate('919953135340', 'datunai_internal_alert', [{
-      type: 'body', parameters: [
-        { type: 'text', text: name || 'Unknown' },
-        { type: 'text', text: phoneNumber || 'Not provided' },
-        { type: 'text', text: diagnosis || 'Pending' },
-        { type: 'text', text: urgency || 'ROUTINE' },
-      ]
-    }]);
+    // INTERNAL ALERT — PLAIN TEXT (templates fail on Business app)
+    const internalMsg = `🚨 NEW DATUN AI CONSULTATION\n\n` +
+      `👤 Patient: ${name || 'Unknown'}\n` +
+      `📞 Phone: ${finalPhone || 'Not provided'}\n` +
+      `📧 Email: ${email || 'N/A'}\n` +
+      `🩺 Diagnosis: ${diagnosis || 'Pending'}\n` +
+      `⚡ Urgency: ${urgency || 'ROUTINE'}\n` +
+      `📋 Report ID: ${finalConsultationId}\n` +
+      `🔗 datunai.com/report/${finalConsultationId}\n\n` +
+      `⏰ ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`;
+    
+    await sendWhatsApp('919953135340', internalMsg);
 
-    // Patient ko template — sirf tab jab valid phone ho
-    if (phoneNumber && phoneNumber.length >= 10 && diagnosis) {
-      const patientPhone = phoneNumber.replace(/^0+/, '');
-      await sendWhatsAppTemplate(patientPhone, 'datunai_consultation_complete', [
-        {
-          type: 'body',
-          parameters: [
-            { type: 'text', text: name || 'there' },
-            { type: 'text', text: diagnosis || 'Dental Concern' },
-            { type: 'text', text: urgency || 'Routine' },
-            { type: 'text', text: 'datunai.com/report/' + newConsultationId }
-          ]
-        }
-      ]);
-      logger.info('WhatsApp template sent for consultation: ' + newConsultationId);
+    // PATIENT TEMPLATE — still use template (approved template works on Cloud API number)
+    if (finalPhone && finalPhone.length >= 10 && diagnosis) {
+      const patientPhone = finalPhone.replace(/^0+/, '');
+      await sendWhatsAppTemplate(patientPhone, 'datunai_consultation_complete', [{
+        type: 'body',
+        parameters: [
+          { type: 'text', text: name || 'there' },
+          { type: 'text', text: diagnosis || 'Dental Concern' },
+          { type: 'text', text: urgency || 'Routine' },
+          { type: 'text', text: 'datunai.com/report/' + finalConsultationId }
+        ]
+      }]);
     }
     
-    res.json({ success: true, consultationId: newConsultationId });
+    res.json({ success: true, consultationId: finalConsultationId });
 
   } catch (err) {
     Sentry.captureException(err);
