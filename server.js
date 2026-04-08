@@ -550,7 +550,6 @@ app.post('/api/auth/user', requireAuth, async (req, res) => {
       city: user.profile_city,
       phone_number: user.phone_number,
       profile_completed: user.profile_completed || false,
-      resume_consultation: resumeConsultation
       resume_consultation: pendingConsultations.length > 0 ? pendingConsultations[0] : null, // backward compat
       pending_consultations: pendingConsultations // NEW: all pending
     });
