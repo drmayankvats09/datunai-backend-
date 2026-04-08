@@ -563,8 +563,14 @@ app.post('/api/auth/user', requireAuth, async (req, res) => {
 app.get('/api/user/consultations', requireAuthAndUser, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, timestamp, updated_at, chief_complaint, diagnosis, urgency, age, gender, status,
-              COALESCE(jsonb_array_length(messages_json), 0) AS msg_count
+      `SELECT 
+         id, timestamp, updated_at, chief_complaint, diagnosis, urgency, 
+         age, gender, status,
+         COALESCE(jsonb_array_length(messages_json), 0) AS msg_count,
+         (SELECT msg->>'content' 
+          FROM jsonb_array_elements(COALESCE(messages_json, '[]'::jsonb)) AS msg 
+          WHERE msg->>'role' = 'user' 
+          LIMIT 1) AS first_user_msg
        FROM consultations 
        WHERE user_id = $1 
        ORDER BY 
