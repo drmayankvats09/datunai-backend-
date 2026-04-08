@@ -45,17 +45,20 @@ app.use(cors({
   }
 }));
 
-// ── RATE LIMITING ──
+// General rate limit — generous for normal API usage
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 50,
-  message: { error: 'Too many requests. Please try again later.' }
+  max: 500,
+  message: { error: 'Too many requests. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false
 });
 
+// Strict limit for AI chat (Claude costs money)
 const strictLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 10,
-  message: { error: 'Slow down! Max 10 messages per minute.' }
+  max: 20,
+  message: { error: 'Slow down! Max 20 messages per minute.' }
 });
 
 app.use('/api/', limiter);
@@ -86,7 +89,7 @@ function getKey(header, callback) {
 function verifyAuth0Token(token) {
   return new Promise((resolve, reject) => {
     jwt.verify(token, getKey, {
-      audience: process.env.AUTH0_CLIENT_ID,
+      audience: process.env.AUTH0_AUDIENCE,
       issuer: `https://${auth0Domain}/`,
       algorithms: ['RS256']
     }, (err, decoded) => {
@@ -94,6 +97,64 @@ function verifyAuth0Token(token) {
       resolve(decoded);
     });
   });
+}
+
+// ════════════════════════════════════════════════════════════
+// FAANG-GRADE AUTH MIDDLEWARE — Local JWT Verification
+// ════════════════════════════════════════════════════════════
+// Purpose: Verify JWT signature locally without calling Auth0.
+// Sets req.auth (decoded token) and optionally req.user (DB row).
+// Why: Eliminates Auth0 /userinfo dependency = no rate limits, 
+// sub-millisecond auth, scales to millions of requests.
+// ════════════════════════════════════════════════════════════
+
+async function requireAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  const token = authHeader.split(' ')[1];
+  
+  try {
+    const decoded = await verifyAuth0Token(token);
+    req.auth = decoded; // decoded.sub = auth0 user ID like "google-oauth2|123"
+    next();
+  } catch (err) {
+    logger.warn('JWT verification failed: ' + err.message);
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+}
+
+// Loads the user from DB based on JWT. Use this for endpoints
+// that need the full user row (most authenticated endpoints).
+async function requireAuthAndUser(req, res, next) {
+  // First verify JWT
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  const token = authHeader.split(' ')[1];
+  
+  try {
+    const decoded = await verifyAuth0Token(token);
+    req.auth = decoded;
+  } catch (err) {
+    logger.warn('JWT verification failed: ' + err.message);
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+  
+  // Then load user from DB
+  try {
+    const r = await pool.query('SELECT * FROM users WHERE auth0_id = $1', [req.auth.sub]);
+    if (!r.rows.length) {
+      return res.status(404).json({ error: 'User not found in database. Please log in again.' });
+    }
+    req.user = r.rows[0];
+    next();
+  } catch (err) {
+    logger.error('User lookup error: ' + err.message);
+    return res.status(500).json({ error: 'Database error during auth' });
+  }
 }
 
 async function initDB() {
@@ -431,32 +492,29 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
-// ── AUTH: SAVE USER AFTER LOGIN ──
-app.post('/api/auth/user', async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Authentication required' });
-  }
+// ── AUTH: SAVE USER AFTER LOGIN (FAANG-grade — uses local JWT verification) ──
+app.post('/api/auth/user', requireAuth, async (req, res) => {
   try {
-    const token = authHeader.split(' ')[1];
-    const userInfo = await axios.get('https://' + auth0Domain + '/userinfo', {
-      headers: { 'Authorization': 'Bearer ' + token }
-    });
-    const { sub: auth0Id, name, email, picture } = userInfo.data;
+    const auth0Id = req.auth.sub; // From verified JWT, not from network call
+    
+    // Profile info comes from request body (frontend has it via Auth0 SPA SDK)
+    const { name, email, picture, preferred_language } = req.body;
+    
     const result = await pool.query(`
       INSERT INTO users (auth0_id, name, email, picture, preferred_language, last_active)
       VALUES ($1, $2, $3, $4, $5, NOW())
       ON CONFLICT (auth0_id) DO UPDATE
-        SET name = EXCLUDED.name,
-            email = EXCLUDED.email,
-            picture = EXCLUDED.picture,
+        SET name = COALESCE(NULLIF(EXCLUDED.name, ''), users.name),
+            email = COALESCE(NULLIF(EXCLUDED.email, ''), users.email),
+            picture = COALESCE(NULLIF(EXCLUDED.picture, ''), users.picture),
             preferred_language = COALESCE(EXCLUDED.preferred_language, users.preferred_language),
             last_active = NOW()
-      RETURNING id, preferred_language, full_name, profile_age, profile_gender, profile_city, profile_completed, phone_number
-    `, [auth0Id, name || '', email || '', picture || '', req.body.preferred_language || 'en']);
+      RETURNING id, name, email, picture, preferred_language, full_name, profile_age, profile_gender, profile_city, profile_completed, phone_number
+    `, [auth0Id, name || '', email || '', picture || '', preferred_language || 'en']);
+    
     const user = result.rows[0];
     
-    // V2: Check for in-progress consultation (last 24h)
+    // Check for in-progress consultation (last 24h)
     let resumeConsultation = null;
     try {
       const resumeQ = await pool.query(`
@@ -471,10 +529,12 @@ app.post('/api/auth/user', async (req, res) => {
       }
     } catch(e) { logger.warn('Resume check failed: ' + e.message); }
     
-    logger.info('User saved: ' + email);
+    logger.info('User synced: ' + (user.email || auth0Id));
     res.json({
       success: true,
-      name, email, picture,
+      name: user.name,
+      email: user.email,
+      picture: user.picture,
       userId: user.id,
       preferred_language: user.preferred_language,
       full_name: user.full_name,
@@ -492,19 +552,8 @@ app.post('/api/auth/user', async (req, res) => {
   }
 });
 // ── GET USER CONSULTATIONS (HISTORY) ──
-app.get('/api/user/consultations', async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Authentication required' });
-  }
+app.get('/api/user/consultations', requireAuthAndUser, async (req, res) => {
   try {
-   const token = authHeader.split(' ')[1];
-    const userInfo = await axios.get('https://' + auth0Domain + '/userinfo', {
-      headers: { 'Authorization': 'Bearer ' + token }
-    });
-    const userResult = await pool.query('SELECT id FROM users WHERE auth0_id = $1', [userInfo.data.sub]);
-    if (!userResult.rows.length) return res.json({ consultations: [] });
-    const userId = userResult.rows[0].id;
     const result = await pool.query(
       `SELECT id, timestamp, updated_at, chief_complaint, diagnosis, urgency, age, gender, status,
               COALESCE(jsonb_array_length(messages_json), 0) AS msg_count
@@ -515,7 +564,7 @@ app.get('/api/user/consultations', async (req, res) => {
          updated_at DESC NULLS LAST,
          timestamp DESC
        LIMIT 30`,
-      [userId]
+      [req.user.id]
     );
     res.json({ consultations: result.rows });
   } catch (err) {
@@ -579,22 +628,11 @@ app.get('/api/consultations/:id/pdf', async (req, res) => {
 });
 
 // ── GET SINGLE CONSULTATION ──
-app.get('/api/user/consultation/:id', async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Authentication required' });
-  }
+app.get('/api/user/consultation/:id', requireAuthAndUser, async (req, res) => {
   try {
-    const token = authHeader.split(' ')[1];
-    const userInfo = await axios.get('https://' + auth0Domain + '/userinfo', {
-      headers: { 'Authorization': 'Bearer ' + token }
-    });
-    const userResult = await pool.query('SELECT id FROM users WHERE auth0_id = $1', [userInfo.data.sub]);
-    if (!userResult.rows.length) return res.status(404).json({ error: 'User not found' });
-    const userId = userResult.rows[0].id;
     const result = await pool.query(
       'SELECT * FROM consultations WHERE id = $1 AND user_id = $2',
-      [req.params.id, userId]
+      [req.params.id, req.user.id]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Consultation not found' });
     res.json({ consultation: result.rows[0] });
@@ -609,25 +647,9 @@ app.get('/api/user/consultation/:id', async (req, res) => {
 // V2: USER PROFILE + INCREMENTAL CONSULTATION ENDPOINTS
 // ═══════════════════════════════════════════════════════════
 
-// Helper: token se user nikalo
-async function getUserFromToken(authHeader) {
-  if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
-  try {
-    const token = authHeader.split(' ')[1];
-    const userInfo = await axios.get('https://' + auth0Domain + '/userinfo', {
-      headers: { 'Authorization': 'Bearer ' + token }
-    });
-    const r = await pool.query('SELECT * FROM users WHERE auth0_id = $1', [userInfo.data.sub]);
-    return r.rows[0] || null;
-  } catch (e) { return null; }
-}
-
 // ─── PROFILE UPDATE (intake form submit) ───
-app.patch('/api/profile', async (req, res) => {
+app.patch('/api/profile', requireAuthAndUser, async (req, res) => {
   try {
-    const user = await getUserFromToken(req.headers.authorization);
-    if (!user) return res.status(401).json({ error: 'Auth required' });
-    
     const { full_name, age, gender, city, phone_number, preferred_language } = req.body;
     
     const result = await pool.query(`
@@ -642,7 +664,7 @@ app.patch('/api/profile', async (req, res) => {
           last_active = NOW()
       WHERE id = $7
       RETURNING *
-    `, [full_name, age, gender, city, phone_number, preferred_language, user.id]);
+    `, [full_name, age, gender, city, phone_number, preferred_language, req.user.id]);
     
     res.json({ success: true, user: result.rows[0] });
   } catch (err) {
@@ -652,18 +674,15 @@ app.patch('/api/profile', async (req, res) => {
 });
 
 // ─── CONSULTATION START (pehla message bhejne pe) ───
-app.post('/api/consultations/start', async (req, res) => {
+app.post('/api/consultations/start', requireAuthAndUser, async (req, res) => {
   try {
-    const user = await getUserFromToken(req.headers.authorization);
-    if (!user) return res.status(401).json({ error: 'Auth required' });
-    
     const { client_uuid } = req.body;
     if (!client_uuid) return res.status(400).json({ error: 'client_uuid required' });
     
     // Idempotent — agar pehle se exists, wahi return karo
     const existing = await pool.query(
       'SELECT id, status FROM consultations WHERE client_uuid = $1 AND user_id = $2',
-      [client_uuid, user.id]
+      [client_uuid, req.user.id]
     );
     if (existing.rows.length > 0) {
       return res.json({ success: true, consultationId: existing.rows[0].id, existing: true });
@@ -675,12 +694,12 @@ app.post('/api/consultations/start', async (req, res) => {
       VALUES ($1, $2, 'in_progress', '[]'::jsonb, $3, $4, $5, $6, $7, NOW(), NOW())
       RETURNING id
     `, [
-      user.id, client_uuid,
-      user.full_name || user.name || '',
-      user.profile_age || '',
-      user.profile_gender || '',
-      user.email || '',
-      user.phone_number || ''
+      req.user.id, client_uuid,
+      req.user.full_name || req.user.name || '',
+      req.user.profile_age || '',
+      req.user.profile_gender || '',
+      req.user.email || '',
+      req.user.phone_number || ''
     ]);
     
     res.json({ success: true, consultationId: result.rows[0].id });
@@ -691,11 +710,8 @@ app.post('/api/consultations/start', async (req, res) => {
 });
 
 // ─── MESSAGE APPEND (har message ke baad) ───
-app.patch('/api/consultations/:id/message', async (req, res) => {
+app.patch('/api/consultations/:id/message', requireAuthAndUser, async (req, res) => {
   try {
-    const user = await getUserFromToken(req.headers.authorization);
-    if (!user) return res.status(401).json({ error: 'Auth required' });
-    
     const { id } = req.params;
     const { role, content } = req.body;
     if (!role || content === undefined) return res.status(400).json({ error: 'role and content required' });
@@ -708,7 +724,7 @@ app.patch('/api/consultations/:id/message', async (req, res) => {
           updated_at = NOW()
       WHERE id = $2 AND user_id = $3 AND status = 'in_progress'
       RETURNING id
-    `, [JSON.stringify([newMsg]), id, user.id]);
+    `, [JSON.stringify([newMsg]), id, req.user.id]);
     
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Consultation not found or completed' });
@@ -721,18 +737,15 @@ app.patch('/api/consultations/:id/message', async (req, res) => {
 });
 
 // ─── CONSULTATION COMPLETE (RX_END pe) ───
-app.post('/api/consultations/:id/complete', async (req, res) => {
+app.post('/api/consultations/:id/complete', requireAuthAndUser, async (req, res) => {
   try {
-    const user = await getUserFromToken(req.headers.authorization);
-    if (!user) return res.status(401).json({ error: 'Auth required' });
-    
     const { id } = req.params;
     const result = await pool.query(`
       UPDATE consultations
       SET status = 'completed', updated_at = NOW()
       WHERE id = $1 AND user_id = $2
       RETURNING id
-    `, [id, user.id]);
+    `, [id, req.user.id]);
     
     if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
     res.json({ success: true });
