@@ -514,19 +514,26 @@ app.post('/api/auth/user', requireAuth, async (req, res) => {
     
     const user = result.rows[0];
     
-    // Check for in-progress consultation (last 24h)
-    let resumeConsultation = null;
+    // Check for in-progress consultations (last 24h) — return ALL, not just one
+    let pendingConsultations = [];
     try {
       const resumeQ = await pool.query(`
-        SELECT id, updated_at, jsonb_array_length(COALESCE(messages_json, '[]'::jsonb)) AS msg_count
-        FROM consultations
-        WHERE user_id = $1 AND status = 'in_progress'
-          AND updated_at > NOW() - INTERVAL '24 hours'
-        ORDER BY updated_at DESC LIMIT 1
-      `, [user.id]);
-      if (resumeQ.rows.length > 0) {
-        resumeConsultation = resumeQ.rows[0];
-      }
+      SELECT 
+      id, 
+      updated_at,
+      COALESCE(NULLIF(chief_complaint, ''), 'New consultation') AS preview,
+      jsonb_array_length(COALESCE(messages_json, '[]'::jsonb)) AS msg_count,
+      (SELECT msg->>'content' FROM jsonb_array_elements(COALESCE(messages_json, '[]'::jsonb)) AS msg 
+       WHERE msg->>'role' = 'user' LIMIT 1) AS first_user_msg
+       FROM consultations
+       WHERE user_id = $1 
+       AND status = 'in_progress'
+       AND updated_at > NOW() - INTERVAL '24 hours'
+       AND jsonb_array_length(COALESCE(messages_json, '[]'::jsonb)) > 0
+       ORDER BY updated_at DESC 
+       LIMIT 5
+       `, [user.id]);
+      pendingConsultations = resumeQ.rows;
     } catch(e) { logger.warn('Resume check failed: ' + e.message); }
     
     logger.info('User synced: ' + (user.email || auth0Id));
@@ -544,6 +551,8 @@ app.post('/api/auth/user', requireAuth, async (req, res) => {
       phone_number: user.phone_number,
       profile_completed: user.profile_completed || false,
       resume_consultation: resumeConsultation
+      resume_consultation: pendingConsultations.length > 0 ? pendingConsultations[0] : null, // backward compat
+      pending_consultations: pendingConsultations // NEW: all pending
     });
   } catch (err) {
     Sentry.captureException(err);
