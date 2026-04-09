@@ -867,7 +867,10 @@ async function initDB() {
     // Index for fast drawer queries
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_consult_user_status ON consultations(user_id, status, updated_at DESC);`);
     
-    // Migrate purani consultations: jo abhi hain woh sab 'completed' maan li jaayengi
+    // Soft delete support — user deletes from UI, row stays in DB
+    await pool.query(`ALTER TABLE consultations ADD COLUMN IF NOT EXISTS deleted_by_user BOOLEAN DEFAULT FALSE;`);
+    await pool.query(`ALTER TABLE consultations ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_consult_deleted ON consultations(deleted_by_user);`);
     await pool.query(`UPDATE consultations SET status = 'completed' WHERE status IS NULL;`);
     
     logger.info('✅ V2 schema migration complete');
@@ -1167,6 +1170,7 @@ app.post('/api/auth/user', requireAuth, async (req, res) => {
        AND status = 'in_progress'
        AND updated_at > NOW() - INTERVAL '24 hours'
        AND jsonb_array_length(COALESCE(messages_json, '[]'::jsonb)) > 0
+       AND deleted_by_user = FALSE
        ORDER BY updated_at DESC 
        LIMIT 5
        `, [user.id]);
@@ -1210,10 +1214,11 @@ app.get('/api/user/consultations', requireAuthAndUser, async (req, res) => {
           LIMIT 1) AS first_user_msg
        FROM consultations 
        WHERE user_id = $1 
-       ORDER BY 
-         CASE WHEN status = 'in_progress' THEN 0 ELSE 1 END,
-         updated_at DESC NULLS LAST,
-         timestamp DESC
+       AND deleted_by_user = FALSE
+       ORDER BY
+       CASE WHEN status = 'in_progress' THEN 0 ELSE 1 END,
+       updated_at DESC NULLS LAST,
+       timestamp DESC
        LIMIT 30`,
       [req.user.id]
     );
@@ -1282,7 +1287,7 @@ app.get('/api/consultations/:id/pdf', async (req, res) => {
 app.get('/api/user/consultation/:id', requireAuthAndUser, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT * FROM consultations WHERE id = $1 AND user_id = $2',
+      'SELECT * FROM consultations WHERE id = $1 AND user_id = $2 AND deleted_by_user = FALSE'
       [req.params.id, req.user.id]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Consultation not found' });
@@ -1291,6 +1296,29 @@ app.get('/api/user/consultation/:id', requireAuthAndUser, async (req, res) => {
     Sentry.captureException(err);
     logger.error('Consultation fetch error: ' + err.message);
     res.status(500).json({ error: 'Failed to fetch consultation' });
+  }
+});
+
+// ─── SOFT DELETE CONSULTATION ───
+// User deletes from UI — row stays in DB, marked deleted_by_user=TRUE
+app.delete('/api/user/consultation/:id', requireAuthAndUser, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE consultations 
+       SET deleted_by_user = TRUE, deleted_at = NOW() 
+       WHERE id = $1 AND user_id = $2 AND deleted_by_user = FALSE
+       RETURNING id`,
+      [req.params.id, req.user.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Consultation not found or already deleted' });
+    }
+    logger.info('Consultation soft-deleted: ' + req.params.id + ' by user ' + req.user.id);
+    res.json({ success: true });
+  } catch (err) {
+    Sentry.captureException(err);
+    logger.error('Delete error: ' + err.message);
+    res.status(500).json({ error: 'Failed to delete consultation' });
   }
 });
 
@@ -1563,9 +1591,10 @@ cron.schedule('0 10 * * *', async () => {
   try {
     const result = await pool.query(
       `SELECT id, name, phone_number, chief_complaint FROM consultations 
-       WHERE timestamp::date = (NOW() - INTERVAL '3 days')::date 
-       AND phone_number IS NOT NULL AND phone_number != '' 
-       AND follow_up_3day_sent = FALSE`
+      WHERE timestamp::date = (NOW() - INTERVAL '3 days')::date 
+      AND phone_number IS NOT NULL AND phone_number != '' 
+      AND follow_up_3day_sent = FALSE
+      AND deleted_by_user = FALSE`
     );
     for (const row of result.rows) {
       const phone = row.phone_number.startsWith('91') ? row.phone_number : '91' + row.phone_number.replace(/^0+/, '');
@@ -1593,9 +1622,10 @@ cron.schedule('30 10 * * *', async () => {
   try {
     const result = await pool.query(
       `SELECT id, name, phone_number, chief_complaint FROM consultations 
-       WHERE timestamp::date = (NOW() - INTERVAL '7 days')::date 
-       AND phone_number IS NOT NULL AND phone_number != '' 
-       AND follow_up_7day_sent = FALSE`
+      WHERE timestamp::date = (NOW() - INTERVAL '7 days')::date 
+      AND phone_number IS NOT NULL AND phone_number != '' 
+      AND follow_up_3day_sent = FALSE
+      AND deleted_by_user = FALSE`
     );
     for (const row of result.rows) {
       const phone = row.phone_number.startsWith('91') ? row.phone_number : '91' + row.phone_number.replace(/^0+/, '');
