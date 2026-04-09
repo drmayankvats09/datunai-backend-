@@ -1287,7 +1287,7 @@ app.get('/api/consultations/:id/pdf', async (req, res) => {
 app.get('/api/user/consultation/:id', requireAuthAndUser, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT * FROM consultations WHERE id = $1 AND user_id = $2 AND deleted_by_user = FALSE'
+      'SELECT * FROM consultations WHERE id = $1 AND user_id = $2 AND deleted_by_user = FALSE',
       [req.params.id, req.user.id]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Consultation not found' });
