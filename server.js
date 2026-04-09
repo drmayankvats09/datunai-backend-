@@ -98,7 +98,7 @@ const langInstructions = {
 
 function buildSystemPrompt(lang, patientName, patientAge, patientGender) {
   const info = `Patient: ${patientName}, Age: ${patientAge}, Gender: ${patientGender}`;
-  return
+  return`
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ⚠️⚠️⚠️ LANGUAGE — MOST IMPORTANT RULE — READ FIRST ⚠️⚠️⚠️
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -638,7 +638,7 @@ Patient's language: ${langNames[lang]||'English'}
 ${langInstructions[lang]||'Respond ONLY in English.'}
 EVERY response, EVERY [OPTIONS: chip1|chip2], EVERY acknowledgment — MUST be in ${langNames[lang]||'English'} ONLY.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-`;}`
+`;}
 
 function buildPhotoPrompt(lang, patientName, patientAge, patientGender, messages) {
   const info = `Patient: ${patientName}, Age: ${patientAge}, Gender: ${patientGender}`;
