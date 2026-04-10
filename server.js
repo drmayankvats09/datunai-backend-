@@ -1545,22 +1545,27 @@ app.post('/api/save-consultation', async (req, res) => {
     // ── WHATSAPP NOTIFICATIONS (FIX: Internal alert as PLAIN TEXT) ──
     logger.info('WhatsApp check — phoneNumber: ' + finalPhone + ' | diagnosis: ' + (diagnosis || 'NONE'));
     
-    // INTERNAL ALERT — PLAIN TEXT (templates fail on Business app)
-    const internalMsg = `🚨 NEW DATUN AI CONSULTATION\n\n` +
-      `👤 Patient: ${name || 'Unknown'}\n` +
-      `📞 Phone: ${finalPhone || 'Not provided'}\n` +
-      `📧 Email: ${email || 'N/A'}\n` +
-      `🩺 Diagnosis: ${diagnosis || 'Pending'}\n` +
-      `⚡ Urgency: ${urgency || 'ROUTINE'}\n` +
-      `📋 Report ID: ${finalConsultationId}\n` +
-      `🔗 datunai.com/report/${finalConsultationId}\n\n` +
-      `⏰ ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`;
-    
-    await sendWhatsApp('919953135340', internalMsg);
+// INTERNAL ALERT — Template (works outside 24h window, dual delivery for safety)
+    const alertParams = [{
+      type: 'body',
+      parameters: [
+        { type: 'text', text: (name || 'Unknown').substring(0, 60) },
+        { type: 'text', text: (finalPhone || 'Not provided').substring(0, 25) },
+        { type: 'text', text: (diagnosis || 'Pending').substring(0, 60) },
+        { type: 'text', text: (urgency || 'ROUTINE').substring(0, 20) }
+      ]
+    }];
+    // Primary: Business inbox (8796 — clean separation)
+    await sendWhatsAppTemplate('918796064170', 'datunai_internal_alert', alertParams);
+    // Backup: Personal (9953 — safety net agar Business app pe drop ho)
+    await sendWhatsAppTemplate('919953135340', 'datunai_internal_alert', alertParams);
 
     // PATIENT TEMPLATE — still use template (approved template works on Cloud API number)
     if (finalPhone && finalPhone.length >= 10 && diagnosis) {
-      const patientPhone = finalPhone.replace(/^0+/, '');
+      // Normalize phone: strip +, leading 0s, spaces; ensure 91 prefix
+      let patientPhone = String(finalPhone).replace(/^\+/, '').replace(/^0+/, '').replace(/\s/g, '');
+      if (!patientPhone.startsWith('91')) patientPhone = '91' + patientPhone;
+      logger.info('Sending consultation_complete template to: ' + patientPhone);
       await sendWhatsAppTemplate(patientPhone, 'datunai_consultation_complete', [{
         type: 'body',
         parameters: [
@@ -1676,14 +1681,18 @@ const startServer = async () => {
 // ── SEND WHATSAPP MESSAGE HELPER ──
 async function sendWhatsApp(to, body) {
   try {
-    await axios.post(
+    const response = await axios.post(
       `https://graph.facebook.com/v19.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
       { messaging_product: 'whatsapp', to, type: 'text', text: { body } },
       { headers: { 'Authorization': `Bearer ${process.env.WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' } }
     );
-    logger.info('WhatsApp message sent to: ' + to);
+    const msgId = response.data?.messages?.[0]?.id || 'unknown';
+    logger.info('✅ WhatsApp text sent → ' + to + ' | msgId: ' + msgId);
   } catch (err) {
-    logger.error('WhatsApp send error: ' + err.message);
+    const metaError = err.response?.data?.error;
+    logger.error('❌ WhatsApp text FAILED → ' + to);
+    logger.error('   Code: ' + (metaError?.code || 'N/A') + ' | Type: ' + (metaError?.type || 'N/A'));
+    logger.error('   Message: ' + (metaError?.message || err.message));
     Sentry.captureException(err);
   }
 }
@@ -1691,7 +1700,7 @@ async function sendWhatsApp(to, body) {
 // ── SEND WHATSAPP TEMPLATE HELPER ──
 async function sendWhatsAppTemplate(to, templateName, components) {
   try {
-    await axios.post(
+    const response = await axios.post(
       `https://graph.facebook.com/v19.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
       {
         messaging_product: 'whatsapp',
@@ -1705,10 +1714,17 @@ async function sendWhatsAppTemplate(to, templateName, components) {
       },
       { headers: { 'Authorization': `Bearer ${process.env.WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' } }
     );
-    logger.info('WhatsApp template sent: ' + templateName + ' to ' + to);
+    const msgId = response.data?.messages?.[0]?.id || 'unknown';
+    logger.info('✅ WhatsApp template sent: ' + templateName + ' → ' + to + ' | msgId: ' + msgId);
+    return { success: true, messageId: msgId };
   } catch (err) {
-    logger.error('WhatsApp template error: ' + err.message);
+    const metaError = err.response?.data?.error;
+    logger.error('❌ WhatsApp template FAILED: ' + templateName + ' → ' + to);
+    logger.error('   Code: ' + (metaError?.code || 'N/A') + ' | Type: ' + (metaError?.type || 'N/A'));
+    logger.error('   Message: ' + (metaError?.message || err.message));
+    logger.error('   Details: ' + JSON.stringify(metaError?.error_data || {}));
     Sentry.captureException(err);
+    return { success: false, error: metaError?.message || err.message };
   }
 }
 
@@ -1759,10 +1775,18 @@ app.post('/webhook', async (req, res) => {
         `Thank you! 😊\n\nYour appointment request has been received.\n\nOur care team will contact you within 30 minutes to confirm your appointment with the right dentist near you.\n\nNeed urgent help?\n📞 +91 87960 64170\n\nEveryone Deserves a Doctor.\n— Datun AI`
       );
       // Internal alert
-      await sendWhatsApp('919953135340',
-        `📅 APPOINTMENT REQUEST\n\n📞 Patient: ${from}\n🕐 Requested just now\n\nAction: Contact patient within 30 minutes.\n\n— Datun AI System`
-      );
-    }
+      const bookAlert = [{
+        type: 'body',
+        parameters: [
+          { type: 'text', text: 'Appointment Request' },
+          { type: 'text', text: from || 'Unknown' },
+          { type: 'text', text: 'Patient clicked Book Appointment' },
+          { type: 'text', text: 'ACTION NEEDED' }
+        ]
+      }];
+      await sendWhatsAppTemplate('918796064170', 'datunai_internal_alert', bookAlert);
+      await sendWhatsAppTemplate('919953135340', 'datunai_internal_alert', bookAlert);
+      }
 
     // STILL IN PAIN
     else if (msgLower === 'still in pain') {
@@ -1770,10 +1794,18 @@ app.post('/webhook', async (req, res) => {
         `We're sorry to hear that. Your health is our priority.\n\nWe strongly recommend visiting a dentist at the earliest. Our care team will reach out to you shortly to help book an appointment.\n\nNeed immediate help?\n📞 +91 87960 64170\n\nEveryone Deserves a Doctor.\n— Datun AI`
       );
       // URGENT internal alert
-      await sendWhatsApp('919953135340',
-        `🚨 URGENT — PATIENT STILL IN PAIN\n\n📞 Patient: ${from}\n⏰ 3-day follow-up response\n⚡ Status: Still in pain\n\nAction Required: Contact patient IMMEDIATELY.\n\n— Datun AI System`
-      );
-    }
+      const painAlert = [{
+        type: 'body',
+        parameters: [
+          { type: 'text', text: 'URGENT — Still in Pain' },
+          { type: 'text', text: from || 'Unknown' },
+          { type: 'text', text: '3-day followup — patient still in pain' },
+          { type: 'text', text: 'EMERGENCY' }
+        ]
+      }];
+      await sendWhatsAppTemplate('918796064170', 'datunai_internal_alert', painAlert);
+      await sendWhatsAppTemplate('919953135340', 'datunai_internal_alert', painAlert);
+      }
 
     // FEELING BETTER
     else if (msgLower === 'feeling better') {
@@ -1815,10 +1847,18 @@ app.post('/webhook', async (req, res) => {
         `Our care team is here for you.\n\nYou can reach us directly:\n📞 Call/WhatsApp: +91 87960 64170\n\nOr reply here — we're listening.\n\nEveryone Deserves a Doctor.\n— Datun AI`
       );
       // Alert
-      await sendWhatsApp('919953135340',
-        `💬 PATIENT WANTS TO TALK\n\n📞 Patient: ${from}\n\nAction: Reach out to patient.\n\n— Datun AI System`
-      );
-    }
+      const talkAlert = [{
+        type: 'body',
+        parameters: [
+          { type: 'text', text: 'Talk Request' },
+          { type: 'text', text: from || 'Unknown' },
+          { type: 'text', text: 'Patient wants to talk' },
+          { type: 'text', text: 'ROUTINE' }
+        ]
+      }];
+      await sendWhatsAppTemplate('918796064170', 'datunai_internal_alert', talkAlert);
+      await sendWhatsAppTemplate('919953135340', 'datunai_internal_alert', talkAlert);
+      }
 
     // CONFIRM (Appointment)
     else if (msgLower === 'confirm') {
@@ -1832,20 +1872,36 @@ app.post('/webhook', async (req, res) => {
       await sendWhatsApp(from,
         `No problem at all.\n\nOur care team will contact you shortly to find a better time.\n\n📞 +91 87960 64170\n\n— Datun AI`
       );
-      await sendWhatsApp('919953135340',
-        `🔄 RESCHEDULE REQUEST\n\n📞 Patient: ${from}\n\nAction: Contact patient to reschedule appointment.\n\n— Datun AI System`
-      );
-    }
+      const rescheduleAlert = [{
+        type: 'body',
+        parameters: [
+          { type: 'text', text: 'Reschedule Request' },
+          { type: 'text', text: from || 'Unknown' },
+          { type: 'text', text: 'Patient wants to reschedule appointment' },
+          { type: 'text', text: 'ROUTINE' }
+        ]
+      }];
+      await sendWhatsAppTemplate('918796064170', 'datunai_internal_alert', rescheduleAlert);
+      await sendWhatsAppTemplate('919953135340', 'datunai_internal_alert', rescheduleAlert);
+      }
 
     // GET DIRECTIONS
     else if (msgLower === 'get directions') {
       await sendWhatsApp(from,
         `Our care team will share the clinic details and directions with you shortly.\n\nOr call us directly:\n📞 +91 87960 64170\n\nEveryone Deserves a Doctor.\n— Datun AI`
       );
-      await sendWhatsApp('919953135340',
-        `📍 DIRECTIONS REQUEST\n\n📞 Patient: ${from}\n\nAction: Share clinic details with patient.\n\n— Datun AI System`
-      );
-    }
+      const dirAlert = [{
+        type: 'body',
+        parameters: [
+          { type: 'text', text: 'Directions Request' },
+          { type: 'text', text: from || 'Unknown' },
+          { type: 'text', text: 'Patient asked for clinic directions' },
+          { type: 'text', text: 'ROUTINE' }
+        ]
+      }];
+      await sendWhatsAppTemplate('918796064170', 'datunai_internal_alert', dirAlert);
+      await sendWhatsAppTemplate('919953135340', 'datunai_internal_alert', dirAlert);
+      }
 
     // HELPFUL (Weekly Tip)
     else if (msgLower === 'helpful') {
@@ -1859,10 +1915,18 @@ app.post('/webhook', async (req, res) => {
       await sendWhatsApp(from,
         `Of course! Type your dental question below and our care team will get back to you.\n\nOr start a detailed AI consultation:\n🔗 www.datunai.com\n\n— Datun AI`
       );
-      await sendWhatsApp('919953135340',
-        `❓ PATIENT QUESTION INCOMING\n\n📞 Patient: ${from}\n\nAction: Monitor for follow-up message.\n\n— Datun AI System`
-      );
-    }
+      const qAlert = [{
+        type: 'body',
+        parameters: [
+          { type: 'text', text: 'Patient Question' },
+          { type: 'text', text: from || 'Unknown' },
+          { type: 'text', text: 'Patient has a question — monitor for follow-up' },
+          { type: 'text', text: 'ROUTINE' }
+        ]
+      }];
+      await sendWhatsAppTemplate('918796064170', 'datunai_internal_alert', qAlert);
+      await sendWhatsAppTemplate('919953135340', 'datunai_internal_alert', qAlert);
+      }
 
     // UNSUBSCRIBE
     else if (msgLower === 'unsubscribe') {
@@ -1904,9 +1968,17 @@ app.post('/webhook', async (req, res) => {
             `Thank you for connecting, ${c.name || ''}! 😊\n\nYour dental report is in this chat above ☝️\n\nOur care team will call you within 30 minutes to help book your appointment.\n\n📋 datunai.com/report/${c.id}\n\nEveryone Deserves a Doctor.\n— Datun AI`
           );
           // Internal alert
-          await sendWhatsApp('919953135340',
-            `🚨 PATIENT CONNECTED\n\n👤 ${c.name || 'Unknown'}\n📞 ${from}\n🩺 ${c.diagnosis || 'N/A'}\n⚡ ${c.urgency || 'ROUTINE'}\n\nAction: Call patient within 30 minutes.\n\n— Datun AI System`
-          );
+          const connectAlert = [{
+            type: 'body',
+            parameters: [
+              { type: 'text', text: (c.name || 'Unknown').substring(0, 60) },
+              { type: 'text', text: from || 'Unknown' },
+              { type: 'text', text: (c.diagnosis || 'N/A').substring(0, 60) },
+              { type: 'text', text: (c.urgency || 'ROUTINE').substring(0, 20) }
+            ]
+          }];
+          await sendWhatsAppTemplate('918796064170', 'datunai_internal_alert', connectAlert);
+          await sendWhatsAppTemplate('919953135340', 'datunai_internal_alert', connectAlert);
         } else {
           await sendWhatsApp(from,
             `Thank you for reaching out! 😊\n\nOur care team will connect with you shortly.\n\n📞 +91 87960 64170\n🔗 datunai.com\n\nEveryone Deserves a Doctor.\n— Datun AI`
