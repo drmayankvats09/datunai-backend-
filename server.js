@@ -6,7 +6,21 @@
 require('dotenv').config();
 const logger = require('./logger');
 const Sentry = require("@sentry/node");
-Sentry.init({ dsn: process.env.SENTRY_DSN });
+Sentry.init({
+  dsn: process.env.SENTRY_DSN,
+  environment: process.env.NODE_ENV || 'production',
+  release: 'datun-ai-backend@2.0.1',
+  tracesSampleRate: 0.1,
+  beforeSend(event, hint) {
+    // Filter known noise: rate-limit hits, expected 4xx
+    const msg = hint?.originalException?.message || event.message || '';
+    if (typeof msg === 'string' && (
+      msg.includes('rate limit') ||
+      msg.includes('Too Many Requests')
+    )) return null;
+    return event;
+  }
+});
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -1018,28 +1032,71 @@ app.get('/report/:id', (req, res) => {
   res.redirect(`/api/consultations/${req.params.id}/pdf`);
 });
 
-// ── HEALTH CHECK ──
+// ── HEALTH CHECK (FAANG-grade deep check) ──
 app.get('/health', async (req, res) => {
+  const startedAt = Date.now();
+  const checks = {
+    server: 'ok',
+    database: 'unknown',
+    database_latency_ms: null,
+    anthropic_api: 'unknown',
+    whatsapp_api: 'unknown',
+    auth0: 'unknown',
+    sheets: 'unknown',
+    sentry: 'unknown',
+    timestamp: new Date().toISOString(),
+    uptime_seconds: Math.floor(process.uptime()),
+    memory_mb: Math.round(process.memoryUsage().rss / 1024 / 1024)
+  };
+
+  let allHealthy = true;
+
+  // Check 1: Database — actual query with latency
   try {
+    const dbStart = Date.now();
     await pool.query('SELECT 1');
-    res.status(200).json({
-      status: 'ok',
-      server: 'running',
-      database: 'connected',
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    Sentry.captureException(error);
-    res.status(500).json({
-      status: 'error',
-      server: 'running',
-      database: 'disconnected',
-      error: error.message
-    });
+    checks.database = 'ok';
+    checks.database_latency_ms = Date.now() - dbStart;
+    if (checks.database_latency_ms > 1000) {
+      checks.database = 'slow';
+      allHealthy = false;
+    }
+  } catch (e) {
+    checks.database = 'error';
+    checks.database_error = (e.message || '').substring(0, 120);
+    allHealthy = false;
+  }
+
+  // Check 2: Anthropic API key configured
+  checks.anthropic_api = process.env.ANTHROPIC_API_KEY ? 'configured' : 'missing';
+  if (checks.anthropic_api === 'missing') allHealthy = false;
+
+  // Check 3: WhatsApp credentials present
+  checks.whatsapp_api = (process.env.WHATSAPP_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID && process.env.WHATSAPP_VERIFY_TOKEN)
+    ? 'configured' : 'missing';
+  if (checks.whatsapp_api === 'missing') allHealthy = false;
+
+  // Check 4: Auth0 config
+  checks.auth0 = (process.env.AUTH0_DOMAIN && process.env.AUTH0_AUDIENCE) ? 'configured' : 'missing';
+  if (checks.auth0 === 'missing') allHealthy = false;
+
+  // Check 5: Google Sheets backup
+  checks.sheets = (process.env.GOOGLE_SHEET_ID && process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL) ? 'configured' : 'missing';
+  // Sheets is non-critical (backup only), don't fail health for this
+
+  // Check 6: Sentry configured
+  checks.sentry = process.env.SENTRY_DSN ? 'configured' : 'missing';
+
+  checks.total_check_ms = Date.now() - startedAt;
+
+  if (allHealthy) {
+    res.status(200).json({ status: 'ok', ...checks });
+  } else {
+    res.status(503).json({ status: 'degraded', ...checks });
   }
 });
 
-// ── UPTIMEROBOT FIX (HEAD SUPPORT) ──
+// ── HEAD support for UptimeRobot ──
 app.head('/health', (req, res) => {
   res.status(200).end();
 });
