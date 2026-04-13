@@ -1937,7 +1937,6 @@ cron.schedule('0 9 * * *', async () => {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // DATUN AI — WhatsApp Cloud API Integration
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 // ── SEND WHATSAPP MESSAGE HELPER ──
 async function sendWhatsApp(to, body) {
   try {
@@ -1948,41 +1947,29 @@ async function sendWhatsApp(to, body) {
     );
     const msgId = response.data?.messages?.[0]?.id || 'unknown';
     logger.info('✅ WhatsApp text sent → ' + to + ' | msgId: ' + msgId);
-    } catch (err) {
+    return { success: true, messageId: msgId };
+  } catch (err) {
     const metaError = err.response?.data?.error;
     const code = metaError?.code || 'N/A';
     const msg = metaError?.message || err.message;
-    logger.error('❌ WhatsApp template FAILED: ' + templateName + ' → ' + to);
+    logger.error('❌ WhatsApp text FAILED → ' + to);
     logger.error('   Code: ' + code + ' | Type: ' + (metaError?.type || 'N/A'));
     logger.error('   Message: ' + msg);
     logger.error('   Details: ' + JSON.stringify(metaError?.error_data || {}));
     Sentry.captureException(err);
-    
-    // Alert only on critical Meta error codes (not transient ones)
+
     const criticalCodes = [131056, 131047, 131051, 190, 131000, 131005];
     if (criticalCodes.includes(Number(code))) {
       await alertAdmin(
         'CRITICAL',
-        `WhatsApp Template Failed (Code ${code})`,
-        `Template: ${templateName}\nRecipient: ${to}\nError: ${msg}\n\nMeaning of code ${code}:\n- 131056: Payment method not verified\n- 131047: Re-engagement window closed\n- 131051: Unsupported message type\n- 190: Access token invalid\n- 131000/131005: Generic message undeliverable`,
-        { alertKey: `wa_template_${code}`, cooldownMin: 60 }
+        `WhatsApp Text Failed (Code ${code})`,
+        `Recipient: ${to}\nError: ${msg}\n\nMeaning of code ${code}:\n- 131056: Payment method not verified\n- 131047: Re-engagement window closed\n- 131051: Unsupported message type\n- 190: Access token invalid\n- 131000/131005: Generic message undeliverable`,
+        { alertKey: `wa_text_${code}`, cooldownMin: 60 }
       );
     }
     return { success: false, error: msg };
   }
-    
-    // Alert only on critical Meta error codes (not transient ones)
-    const criticalCodes = [131056, 131047, 131051, 190, 131000, 131005];
-    if (criticalCodes.includes(Number(code))) {
-      await alertAdmin(
-        'CRITICAL',
-        `WhatsApp Template Failed (Code ${code})`,
-        `Template: ${templateName}\nRecipient: ${to}\nError: ${msg}\n\nMeaning of code ${code}:\n- 131056: Payment method not verified\n- 131047: Re-engagement window closed\n- 131051: Unsupported message type\n- 190: Access token invalid\n- 131000/131005: Generic message undeliverable`,
-        { alertKey: `wa_template_${code}`, cooldownMin: 60 }
-      );
-    }
-    return { success: false, error: msg };
-  }
+}
 
 // ── SEND WHATSAPP TEMPLATE HELPER ──
 async function sendWhatsAppTemplate(to, templateName, components) {
@@ -2004,7 +1991,7 @@ async function sendWhatsAppTemplate(to, templateName, components) {
     const msgId = response.data?.messages?.[0]?.id || 'unknown';
     logger.info('✅ WhatsApp template sent: ' + templateName + ' → ' + to + ' | msgId: ' + msgId);
     return { success: true, messageId: msgId };
-} catch (err) {
+  } catch (err) {
     const metaError = err.response?.data?.error;
     const code = metaError?.code || 'N/A';
     const msg = metaError?.message || err.message;
@@ -2013,8 +2000,7 @@ async function sendWhatsAppTemplate(to, templateName, components) {
     logger.error('   Message: ' + msg);
     logger.error('   Details: ' + JSON.stringify(metaError?.error_data || {}));
     Sentry.captureException(err);
-    
-    // Alert only on critical Meta error codes (not transient ones)
+
     const criticalCodes = [131056, 131047, 131051, 190, 131000, 131005];
     if (criticalCodes.includes(Number(code))) {
       await alertAdmin(
@@ -2026,6 +2012,8 @@ async function sendWhatsAppTemplate(to, templateName, components) {
     }
     return { success: false, error: msg };
   }
+}
+
 // ── WEBHOOK VERIFY (Meta calls this to verify your endpoint) ──
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
