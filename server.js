@@ -1672,9 +1672,12 @@ cron.schedule('0 10 * * *', async () => {
       await pool.query('UPDATE consultations SET follow_up_3day_sent = TRUE WHERE id = $1', [row.id]);
       logger.info('3-day follow-up sent to: ' + row.phone_number);
     }
+await pingHealthcheck(process.env.HEALTHCHECK_3DAY_URL);
   } catch (err) {
     logger.error('3-day cron error: ' + err.message);
     Sentry.captureException(err);
+    await pingHealthcheck(process.env.HEALTHCHECK_3DAY_URL, true);
+    await alertAdmin('WARNING', '3-Day Follow-up Cron Failed', err.message);
   }
 }, { timezone: 'Asia/Kolkata' });
 
@@ -1703,9 +1706,12 @@ cron.schedule('30 10 * * *', async () => {
       await pool.query('UPDATE consultations SET follow_up_7day_sent = TRUE WHERE id = $1', [row.id]);
       logger.info('7-day follow-up sent to: ' + row.phone_number);
     }
+await pingHealthcheck(process.env.HEALTHCHECK_7DAY_URL);
   } catch (err) {
     logger.error('7-day cron error: ' + err.message);
     Sentry.captureException(err);
+    await pingHealthcheck(process.env.HEALTHCHECK_7DAY_URL, true);
+    await alertAdmin('WARNING', '7-Day Follow-up Cron Failed', err.message);
   }
 }, { timezone: 'Asia/Kolkata' });
 
@@ -1732,6 +1738,203 @@ const startServer = async () => {
 };
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// DATUN AI — OBSERVABILITY & ALERTING 
+// Email alerts via Resend, heartbeats, daily report,
+// WhatsApp API health monitor, healthchecks.io ping.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+const { Resend } = require('resend');
+const resendClient = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
+
+// In-memory state for alert deduplication (avoids spamming on flaps)
+const alertState = {
+  whatsappFailCount: 0,
+  whatsappLastAlertAt: 0,
+  dbSlowCount: 0,
+  lastAlertCache: new Map() // alertKey -> timestamp
+};
+
+// ── ADMIN EMAIL HELPER (Resend) ──
+async function sendAdminEmail(subject, htmlBody) {
+  if (!resendClient) {
+    logger.warn('[Alert] Resend not configured, email skipped: ' + subject);
+    return false;
+  }
+  try {
+    await resendClient.emails.send({
+      from: 'Datun AI System <system@datunai.com>',
+      to: ['hello@datunai.com'],
+      subject: subject,
+      html: htmlBody
+    });
+    return true;
+  } catch (e) {
+    logger.error('[Alert] Resend email failed: ' + (e.message || e));
+    return false;
+  }
+}
+
+// ── ALERT ADMIN — Self-alert function for use anywhere in code ──
+// Severity: 'CRITICAL' | 'WARNING' | 'INFO'
+// alertKey: unique string for dedup (same key won't re-alert within cooldownMin)
+async function alertAdmin(severity, title, details, opts = {}) {
+  const cooldownMin = opts.cooldownMin || 30;
+  const alertKey = opts.alertKey || `${severity}:${title}`;
+  
+  // Dedup check
+  const now = Date.now();
+  const lastSent = alertState.lastAlertCache.get(alertKey) || 0;
+  if (now - lastSent < cooldownMin * 60 * 1000) {
+    logger.info(`[Alert] Suppressed (cooldown): ${alertKey}`);
+    return;
+  }
+  alertState.lastAlertCache.set(alertKey, now);
+  
+  const emoji = { CRITICAL: '🚨', WARNING: '⚠️', INFO: 'ℹ️' }[severity] || '🔔';
+  const color = { CRITICAL: '#dc2626', WARNING: '#f59e0b', INFO: '#0a9e8f' }[severity] || '#666';
+  const subject = `${emoji} [${severity}] Datun AI — ${title}`;
+  const html = `
+    <div style="font-family:Inter,sans-serif;max-width:600px;margin:0 auto;background:#0a0f1a;color:#fff;padding:24px;border-radius:12px">
+      <h2 style="margin:0 0 16px;color:${color}">${emoji} Datun AI System Alert</h2>
+      <p style="margin:8px 0"><strong>Severity:</strong> <span style="color:${color}">${severity}</span></p>
+      <p style="margin:8px 0"><strong>Issue:</strong> ${title}</p>
+      <p style="margin:8px 0"><strong>Time (IST):</strong> ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</p>
+      <pre style="background:#111827;padding:16px;border-radius:8px;font-family:monospace;white-space:pre-wrap;word-break:break-word;font-size:13px;color:#a7f3d0">${escapeHtml(details)}</pre>
+      <p style="margin-top:24px;font-size:12px;color:#888">Datun AI · Automated Alert System · datunai.com</p>
+    </div>
+  `;
+  
+  await sendAdminEmail(subject, html);
+  logger.error(`[ALERT][${severity}] ${title}: ${details}`);
+  Sentry.captureMessage(`[${severity}] ${title}`, severity === 'CRITICAL' ? 'error' : 'warning');
+}
+
+function escapeHtml(s) {
+  if (typeof s !== 'string') s = JSON.stringify(s, null, 2);
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ── HEALTHCHECKS.IO PING HELPER ──
+async function pingHealthcheck(url, isFail = false) {
+  if (!url) return;
+  try {
+    const finalUrl = isFail ? `${url}/fail` : url;
+    await axios.get(finalUrl, { timeout: 5000 });
+  } catch (e) {
+    // Silent — healthchecks.io itself failing shouldn't crash anything
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// CRON: WhatsApp API Heartbeat (every 30 min)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+cron.schedule('*/30 * * * *', async () => {
+  if (!process.env.WHATSAPP_TOKEN || !process.env.WHATSAPP_PHONE_NUMBER_ID) {
+    logger.warn('[Heartbeat] WhatsApp env vars missing, skipping');
+    return;
+  }
+  try {
+    const startTime = Date.now();
+    const res = await axios.get(
+      `https://graph.facebook.com/v19.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}`,
+      {
+        headers: { 'Authorization': `Bearer ${process.env.WHATSAPP_TOKEN}` },
+        timeout: 10000
+      }
+    );
+    const latency = Date.now() - startTime;
+    
+    if (res.status === 200) {
+      // Recovery alert if we were previously failing
+      if (alertState.whatsappFailCount >= 3) {
+        await alertAdmin(
+          'INFO',
+          'WhatsApp API Recovered',
+          `WhatsApp Cloud API is healthy again after ${alertState.whatsappFailCount} consecutive failures.\nLatency: ${latency}ms`,
+          { alertKey: 'whatsapp_recovery', cooldownMin: 5 }
+        );
+      }
+      alertState.whatsappFailCount = 0;
+      logger.info(`[Heartbeat] WhatsApp API ok | latency: ${latency}ms`);
+      await pingHealthcheck(process.env.HEALTHCHECK_WHATSAPP_URL);
+    }
+  } catch (err) {
+    alertState.whatsappFailCount++;
+    const code = err.response?.data?.error?.code || err.code || 'N/A';
+    const msg = err.response?.data?.error?.message || err.message;
+    
+    logger.error(`[Heartbeat] WhatsApp API fail #${alertState.whatsappFailCount}: Code ${code} — ${msg}`);
+    await pingHealthcheck(process.env.HEALTHCHECK_WHATSAPP_URL, true);
+    
+    // Alert only on 3rd consecutive failure (avoid noise from transient blips)
+    if (alertState.whatsappFailCount === 3) {
+      await alertAdmin(
+        'CRITICAL',
+        'WhatsApp Cloud API Down',
+        `3 consecutive heartbeat failures over the last 90 minutes.\n\nError code: ${code}\nMessage: ${msg}\n\nPossible causes:\n- Access token expired or revoked\n- Phone number deregistered\n- Meta payment method missing/expired\n- Meta API outage\n\nAction:\n1. Check business.facebook.com → WhatsApp Manager → Phone Numbers\n2. Verify access token in Business Settings → System Users\n3. Check status.fb.com for Meta outages`,
+        { alertKey: 'whatsapp_down', cooldownMin: 60 }
+      );
+    }
+  }
+}, { timezone: 'Asia/Kolkata' });
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// CRON: Daily Business Report (every day at 9 AM IST)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+cron.schedule('0 9 * * *', async () => {
+  logger.info('[Daily Report] Starting...');
+  try {
+    const result = await pool.query(`
+      SELECT
+        (SELECT COUNT(*) FROM consultations WHERE timestamp > NOW() - INTERVAL '24 hours' AND deleted_by_user = FALSE) AS total_24h,
+        (SELECT COUNT(*) FROM consultations WHERE timestamp > NOW() - INTERVAL '24 hours' AND deleted_by_user = FALSE AND status = 'completed') AS completed_24h,
+        (SELECT COUNT(*) FROM consultations WHERE timestamp > NOW() - INTERVAL '24 hours' AND deleted_by_user = FALSE AND status = 'in_progress') AS in_progress_24h,
+        (SELECT COUNT(DISTINCT user_id) FROM consultations WHERE timestamp > NOW() - INTERVAL '24 hours' AND deleted_by_user = FALSE) AS unique_users_24h,
+        (SELECT COUNT(*) FROM consultations WHERE timestamp > NOW() - INTERVAL '24 hours' AND urgency = 'EMERGENCY' AND deleted_by_user = FALSE) AS emergencies_24h,
+        (SELECT COUNT(*) FROM users WHERE created_at > NOW() - INTERVAL '24 hours') AS new_users_24h,
+        (SELECT COUNT(*) FROM users) AS total_users,
+        (SELECT COUNT(*) FROM consultations WHERE deleted_by_user = FALSE) AS total_consultations
+    `);
+    
+    const s = result.rows[0];
+    
+    const html = `
+      <div style="font-family:Inter,sans-serif;max-width:600px;margin:0 auto;background:#0a0f1a;color:#fff;padding:24px;border-radius:12px">
+        <h1 style="margin:0 0 8px;color:#12c4b2">🦷 Datun AI — Daily Health Report</h1>
+        <p style="margin:0 0 24px;color:#888;font-size:13px">${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</p>
+        
+        <h3 style="color:#12c4b2;margin-bottom:8px">📊 Last 24 Hours</h3>
+        <table style="width:100%;border-collapse:collapse">
+          <tr><td style="padding:6px 0;color:#a7f3d0">Total consultations started</td><td style="text-align:right;font-weight:600">${s.total_24h}</td></tr>
+          <tr><td style="padding:6px 0;color:#a7f3d0">Completed</td><td style="text-align:right;font-weight:600">${s.completed_24h}</td></tr>
+          <tr><td style="padding:6px 0;color:#a7f3d0">In progress (abandoned?)</td><td style="text-align:right;font-weight:600">${s.in_progress_24h}</td></tr>
+          <tr><td style="padding:6px 0;color:#a7f3d0">Unique users</td><td style="text-align:right;font-weight:600">${s.unique_users_24h}</td></tr>
+          <tr><td style="padding:6px 0;color:#fca5a5">🚨 Emergencies detected</td><td style="text-align:right;font-weight:600;color:#fca5a5">${s.emergencies_24h}</td></tr>
+          <tr><td style="padding:6px 0;color:#a7f3d0">New signups</td><td style="text-align:right;font-weight:600">${s.new_users_24h}</td></tr>
+        </table>
+        
+        <h3 style="color:#12c4b2;margin-top:24px;margin-bottom:8px">📈 All-Time</h3>
+        <table style="width:100%;border-collapse:collapse">
+          <tr><td style="padding:6px 0;color:#a7f3d0">Total registered users</td><td style="text-align:right;font-weight:600">${s.total_users}</td></tr>
+          <tr><td style="padding:6px 0;color:#a7f3d0">Total consultations</td><td style="text-align:right;font-weight:600">${s.total_consultations}</td></tr>
+        </table>
+        
+        <p style="margin-top:32px;padding-top:16px;border-top:1px solid #1e2a3a;color:#888;font-size:12px;text-align:center">Everyone Deserves a Doctor.<br/>— Datun AI Automated Reports</p>
+      </div>
+    `;
+    
+    await sendAdminEmail(`📊 Datun AI Daily Report — ${new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}`, html);
+    logger.info('[Daily Report] Sent | stats: ' + JSON.stringify(s));
+    await pingHealthcheck(process.env.HEALTHCHECK_DAILY_REPORT_URL);
+  } catch (e) {
+    logger.error('[Daily Report] Failed: ' + e.message);
+    Sentry.captureException(e);
+    await pingHealthcheck(process.env.HEALTHCHECK_DAILY_REPORT_URL, true);
+    await alertAdmin('WARNING', 'Daily Report Cron Failed', e.message || String(e));
+  }
+}, { timezone: 'Asia/Kolkata' });
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // DATUN AI — WhatsApp Cloud API Integration
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -1745,14 +1948,41 @@ async function sendWhatsApp(to, body) {
     );
     const msgId = response.data?.messages?.[0]?.id || 'unknown';
     logger.info('✅ WhatsApp text sent → ' + to + ' | msgId: ' + msgId);
-  } catch (err) {
+    } catch (err) {
     const metaError = err.response?.data?.error;
-    logger.error('❌ WhatsApp text FAILED → ' + to);
-    logger.error('   Code: ' + (metaError?.code || 'N/A') + ' | Type: ' + (metaError?.type || 'N/A'));
-    logger.error('   Message: ' + (metaError?.message || err.message));
+    const code = metaError?.code || 'N/A';
+    const msg = metaError?.message || err.message;
+    logger.error('❌ WhatsApp template FAILED: ' + templateName + ' → ' + to);
+    logger.error('   Code: ' + code + ' | Type: ' + (metaError?.type || 'N/A'));
+    logger.error('   Message: ' + msg);
+    logger.error('   Details: ' + JSON.stringify(metaError?.error_data || {}));
     Sentry.captureException(err);
+    
+    // Alert only on critical Meta error codes (not transient ones)
+    const criticalCodes = [131056, 131047, 131051, 190, 131000, 131005];
+    if (criticalCodes.includes(Number(code))) {
+      await alertAdmin(
+        'CRITICAL',
+        `WhatsApp Template Failed (Code ${code})`,
+        `Template: ${templateName}\nRecipient: ${to}\nError: ${msg}\n\nMeaning of code ${code}:\n- 131056: Payment method not verified\n- 131047: Re-engagement window closed\n- 131051: Unsupported message type\n- 190: Access token invalid\n- 131000/131005: Generic message undeliverable`,
+        { alertKey: `wa_template_${code}`, cooldownMin: 60 }
+      );
+    }
+    return { success: false, error: msg };
   }
-}
+    
+    // Alert only on critical Meta error codes (not transient ones)
+    const criticalCodes = [131056, 131047, 131051, 190, 131000, 131005];
+    if (criticalCodes.includes(Number(code))) {
+      await alertAdmin(
+        'CRITICAL',
+        `WhatsApp Template Failed (Code ${code})`,
+        `Template: ${templateName}\nRecipient: ${to}\nError: ${msg}\n\nMeaning of code ${code}:\n- 131056: Payment method not verified\n- 131047: Re-engagement window closed\n- 131051: Unsupported message type\n- 190: Access token invalid\n- 131000/131005: Generic message undeliverable`,
+        { alertKey: `wa_template_${code}`, cooldownMin: 60 }
+      );
+    }
+    return { success: false, error: msg };
+  }
 
 // ── SEND WHATSAPP TEMPLATE HELPER ──
 async function sendWhatsAppTemplate(to, templateName, components) {
@@ -1774,17 +2004,28 @@ async function sendWhatsAppTemplate(to, templateName, components) {
     const msgId = response.data?.messages?.[0]?.id || 'unknown';
     logger.info('✅ WhatsApp template sent: ' + templateName + ' → ' + to + ' | msgId: ' + msgId);
     return { success: true, messageId: msgId };
-  } catch (err) {
+} catch (err) {
     const metaError = err.response?.data?.error;
+    const code = metaError?.code || 'N/A';
+    const msg = metaError?.message || err.message;
     logger.error('❌ WhatsApp template FAILED: ' + templateName + ' → ' + to);
-    logger.error('   Code: ' + (metaError?.code || 'N/A') + ' | Type: ' + (metaError?.type || 'N/A'));
-    logger.error('   Message: ' + (metaError?.message || err.message));
+    logger.error('   Code: ' + code + ' | Type: ' + (metaError?.type || 'N/A'));
+    logger.error('   Message: ' + msg);
     logger.error('   Details: ' + JSON.stringify(metaError?.error_data || {}));
     Sentry.captureException(err);
-    return { success: false, error: metaError?.message || err.message };
+    
+    // Alert only on critical Meta error codes (not transient ones)
+    const criticalCodes = [131056, 131047, 131051, 190, 131000, 131005];
+    if (criticalCodes.includes(Number(code))) {
+      await alertAdmin(
+        'CRITICAL',
+        `WhatsApp Template Failed (Code ${code})`,
+        `Template: ${templateName}\nRecipient: ${to}\nError: ${msg}\n\nMeaning of code ${code}:\n- 131056: Payment method not verified\n- 131047: Re-engagement window closed\n- 131051: Unsupported message type\n- 190: Access token invalid\n- 131000/131005: Generic message undeliverable`,
+        { alertKey: `wa_template_${code}`, cooldownMin: 60 }
+      );
+    }
+    return { success: false, error: msg };
   }
-}
-
 // ── WEBHOOK VERIFY (Meta calls this to verify your endpoint) ──
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
