@@ -1101,6 +1101,43 @@ app.head('/health', (req, res) => {
   res.status(200).end();
 });
 
+// ── TEMPORARY: Observability verification endpoints (REMOVE AFTER TESTING) ──
+// Test 1: Sentry backend direct capture
+app.get('/test-sentry-xyz-2026', (req, res) => {
+  const testError = new Error('Master Test — Sentry backend verification [' + new Date().toISOString() + ']');
+  Sentry.captureException(testError);
+  logger.error('[TEST] Sentry test error dispatched: ' + testError.message);
+  res.json({ 
+    ok: true, 
+    message: 'Sentry event dispatched. Check Sentry dashboard + email within 60 sec.',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Test 2: Deliberately throw unhandled error (simulates real code bug)
+app.get('/test-throw-xyz-2026', (req, res) => {
+  // This will trigger Express default error handler → Sentry captures
+  throw new Error('Master Test — Unhandled throw [' + new Date().toISOString() + ']');
+});
+
+// Test 3: alertAdmin (Resend email) verification
+app.get('/test-alert-xyz-2026', async (req, res) => {
+  try {
+    await alertAdmin(
+      'INFO',
+      'Master Test — alertAdmin Verification',
+      'Ye test email hai. Agar tu ye dekh raha hai, Resend + alertAdmin perfectly kaam kar raha hai.'
+    );
+    res.json({ 
+      ok: true, 
+      message: 'Alert dispatched via Resend. Check hello@datunai.com inbox within 60 seconds.',
+      timestamp: new Date().toISOString()
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ── MAIN CHAT ENDPOINT ──
 app.post('/api/chat', async (req, res) => {
   try {
