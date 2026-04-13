@@ -2322,11 +2322,30 @@ app.post('/webhook', async (req, res) => {
       );
     }
 
-    res.sendStatus(200);
+res.sendStatus(200);
   } catch (err) {
     logger.error('WhatsApp webhook error: ' + err.message);
     Sentry.captureException(err);
     res.sendStatus(200);
   }
 });
+
+// ═══════════════════════════════════════════════════════════
+// SENTRY EXPRESS ERROR HANDLER — MUST be after all routes
+// Captures any unhandled errors thrown in route handlers
+// Required for @sentry/node v8+ (OpenTelemetry-based)
+// ═══════════════════════════════════════════════════════════
+Sentry.setupExpressErrorHandler(app);
+
+// ── FINAL FALLBACK ERROR HANDLER (runs after Sentry) ──
+app.use((err, req, res, next) => {
+  logger.error('Unhandled route error: ' + err.message);
+  // Sentry already captured via setupExpressErrorHandler above
+  if (res.headersSent) return next(err);
+  res.status(500).json({ 
+    error: 'Internal server error',
+    requestId: res.sentry || undefined  // Sentry attaches event ID to res
+  });
+});
+
 startServer();
