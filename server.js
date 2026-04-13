@@ -1115,8 +1115,32 @@ app.post('/api/chat', async (req, res) => {
       return res.status(400).json({ error: 'Invalid messages format' });
     }
 
-    if (messages.length > 100) {
+if (messages.length > 100) {
       return res.status(400).json({ error: 'Conversation too long' });
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // IMAGE SIZE VALIDATION GATE — Pre-Claude check
+    // Prevents retry loop on >5 MB images + saves API cost
+    // ═══════════════════════════════════════════════════════════
+    const CLAUDE_IMAGE_LIMIT = 5 * 1024 * 1024; // 5 MB raw
+    for (const msg of messages) {
+      if (Array.isArray(msg.content)) {
+        for (const block of msg.content) {
+          if (block.type === 'image' && block.source?.data) {
+            // base64 length * 0.75 = approximate raw bytes
+            const rawBytes = Math.ceil(block.source.data.length * 0.75);
+            if (rawBytes > CLAUDE_IMAGE_LIMIT) {
+              logger.warn(`Image too large: ${(rawBytes/1024/1024).toFixed(2)} MB > 5 MB limit`);
+              return res.status(413).json({
+                error: 'Image too large',
+                errorCode: 'PAYLOAD_TOO_LARGE',
+                message: 'Image must be under 5 MB. Please use a smaller photo.'
+              });
+            }
+          }
+        }
+      }
     }
 
     if (!process.env.ANTHROPIC_API_KEY) {
@@ -1166,22 +1190,33 @@ app.post('/api/chat', async (req, res) => {
     Sentry.captureException(lastError);
     logger.error('Chat error after 3 attempts: ' + JSON.stringify(lastError.response?.data || lastError.message));
 
+// Structured error codes for frontend graceful degradation
+    const anthropicErr = lastError.response?.data?.error;
+    let errorCode = 'UNKNOWN';
+    if (anthropicErr?.message?.includes('image exceeds')) errorCode = 'PAYLOAD_TOO_LARGE';
+    else if (anthropicErr?.type === 'invalid_request_error') errorCode = 'INVALID_IMAGE';
+    else if (anthropicErr?.type === 'overloaded_error') errorCode = 'API_OVERLOAD';
+    else if (lastError.response?.status === 429) errorCode = 'API_OVERLOAD';
+    else if (lastError.response?.status === 401) errorCode = 'AUTH_FAIL';
+    else if (lastError.code === 'ECONNABORTED') errorCode = 'TIMEOUT';
+    else if (lastError.code === 'ENOTFOUND' || lastError.code === 'ECONNRESET') errorCode = 'NETWORK_ERROR';
+
     if (lastError.response?.status === 401) {
-      return res.status(500).json({ error: 'API authentication failed' });
+      return res.status(500).json({ error: 'API authentication failed', errorCode });
     }
-    if (lastError.response?.status === 429) {
-      return res.status(429).json({ error: 'AI service busy. Please try again in a moment.' });
+    if (lastError.response?.status === 429 || anthropicErr?.type === 'overloaded_error') {
+      return res.status(429).json({ error: 'AI service busy. Please try again in a moment.', errorCode });
     }
     if (lastError.code === 'ECONNABORTED') {
-      return res.status(504).json({ error: 'Request timed out. Please try again.' });
+      return res.status(504).json({ error: 'Request timed out. Please try again.', errorCode });
     }
 
-    // Language-aware error message
+    // Language-aware error message with errorCode for frontend
     const errLang = (lang === 'hi' || lang === 'hinglish') ? 'hi' : 'en';
     const errorMsg = errLang === 'hi'
       ? 'Kuch gadbad hui. Dobara try karein. 🙏'
       : 'Something went wrong. Please try again. 🙏';
-    res.status(500).json({ error: errorMsg });
+    res.status(500).json({ error: errorMsg, errorCode });
 
   } catch (error) {
     Sentry.captureException(error);
