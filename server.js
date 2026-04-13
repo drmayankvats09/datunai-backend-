@@ -1147,20 +1147,27 @@ if (messages.length > 100) {
       return res.status(500).json({ error: 'Server configuration error' });
     }
 
-    // ── RETRY LOGIC ──
+// ═══════════════════════════════════════════════════════════
+    // RETRY LOGIC — Exponential Backoff + Jitter
+    // AWS SDK pattern: 5 retries with smart delays
+    // Handles Anthropic overload (529) windows up to 40-60 sec
+    // ═══════════════════════════════════════════════════════════
+    const MAX_RETRIES = 5;
+    const BASE_DELAY_MS = 1500; // 1.5 sec base
     let lastError;
-    for (let attempt = 1; attempt <= 3; attempt++) {
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
         const response = await axios.post(
           'https://api.anthropic.com/v1/messages',
           {
-            model: 'claude-sonnet-4-20250514', // 
+            model: 'claude-sonnet-4-20250514',
             max_tokens: 2000,
             system: [
               {
                 type: "text",
                 text: system || '',
-                cache_control: { type: "ephemeral" } // 
+                cache_control: { type: "ephemeral" }
               }
             ],
             messages: messages
@@ -1170,19 +1177,53 @@ if (messages.length > 100) {
               'Content-Type': 'application/json',
               'x-api-key': process.env.ANTHROPIC_API_KEY,
               'anthropic-version': '2023-06-01',
-              'anthropic-beta': 'prompt-caching-2024-07-31' // 
+              'anthropic-beta': 'prompt-caching-2024-07-31'
             },
             timeout: 60000
           }
         );
         console.log("Token Usage:", JSON.stringify(response.data.usage));
+        if (attempt > 1) {
+          logger.info(`Claude API recovered on attempt ${attempt} ✅`);
+        }
         return res.json(response.data);
       } catch (err) {
         lastError = err;
-        if (attempt < 3) {
-          logger.warn(`Claude API attempt ${attempt} failed. Retrying...`);
-          await new Promise(r => setTimeout(r, 1000 * attempt));
+        const status = err.response?.status;
+        const errType = err.response?.data?.error?.type;
+        const isRetryable = (
+          status === 429 ||                    // Rate limit
+          status === 529 ||                    // Overloaded
+          status === 503 ||                    // Service unavailable
+          status === 502 ||                    // Bad gateway
+          status === 504 ||                    // Gateway timeout
+          errType === 'overloaded_error' ||    // Anthropic specific
+          errType === 'api_error' ||           // Transient API error
+          err.code === 'ECONNABORTED' ||       // Timeout
+          err.code === 'ECONNRESET' ||         // Connection reset
+          err.code === 'ETIMEDOUT' ||          // Network timeout
+          err.code === 'ENOTFOUND'             // DNS issue
+        );
+
+        // Non-retryable errors (400, 401, 403, invalid input) → fail fast
+        if (!isRetryable) {
+          logger.error(`Non-retryable Claude error (status ${status}): ${errType || err.message}`);
+          break;
         }
+
+        // If we've exhausted retries, break and fall through to error response
+        if (attempt >= MAX_RETRIES) {
+          logger.error(`Claude API exhausted ${MAX_RETRIES} retries. Giving up.`);
+          break;
+        }
+
+        // Exponential backoff with jitter: 1.5s, 3s, 6s, 12s, 24s (+ random 0-1s jitter)
+        // Total possible wait: up to ~46 sec → covers most Anthropic overload windows
+        const exponentialDelay = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+        const jitter = Math.random() * 1000; // 0-1 sec random
+        const delay = exponentialDelay + jitter;
+        logger.warn(`Claude API attempt ${attempt}/${MAX_RETRIES} failed (${errType || status || err.code}). Retrying in ${Math.round(delay/1000)}s...`);
+        await new Promise(r => setTimeout(r, delay));
       }
     }
 
