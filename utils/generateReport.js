@@ -427,7 +427,7 @@ function generateConsultationPDF(data, stream) {
   doc.moveDown(0.15);
   doc.font('Helvetica').fontSize(7).fillColor(gray).text('Healthcare is a Right, Not a Privilege',M,doc.y,{width:CW,align:'center'});
   doc.moveDown(0.15);
-  doc.font('Helvetica').fontSize(6.5).fillColor(grayLt).text('datunai.com  |  New Delhi, India  |  © 2025-2026 Datun AI Private Limited',M,doc.y,{width:CW,align:'center'});
+  doc.font('Helvetica').fontSize(6.5).fillColor(grayLt).text('datunai.com  |  New Delhi, India  |  © 2025-2026 Datun AI ',M,doc.y,{width:CW,align:'center'});
 
   doc.pipe(stream);
   doc.end();
