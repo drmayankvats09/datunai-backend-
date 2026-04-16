@@ -17,3 +17,9 @@ cp .env.example .env
 # Add your API key in .env
 npm start
 ```
+
+---
+
+---
+
+Local dev setup verified by Dr. Mayank Vats on 16 April 2026. Ready for Datun v2 rebuild. 🦷
